@@ -609,20 +609,19 @@ Type ProtocolConformanceRef::getAssociatedType(Type conformingType,
   auto type = assocType->getCanonicalType();
   auto proto = getRequirement();
 
-#if false
   // Fast path for generic parameters.
   if (isa<GenericTypeParamType>(type)) {
     assert(type->isEqual(proto->getSelfInterfaceType()) &&
            "type parameter in protocol was not Self");
-    return getType();
+    return conformingType;
   }
 
   // Fast path for dependent member types on 'Self' of our associated types.
   auto memberType = cast<DependentMemberType>(type);
   if (memberType.getBase()->isEqual(proto->getProtocolSelfType()) &&
-      memberType->getAssocType()->getProtocol() == proto)
-    return getTypeWitness(memberType->getAssocType(), nullptr);
-#endif
+      memberType->getAssocType()->getProtocol() == proto &&
+      isConcrete())
+    return getConcrete()->getTypeWitness(memberType->getAssocType(), resolver);
 
   // General case: consult the substitution map.
   auto substMap =
@@ -958,10 +957,8 @@ ProtocolConformance::subst(Type substType,
              && "substitution mapped to different nominal?!");
 
       SubstitutionMap subMap;
-      if (getGenericSignature()) {
-        auto *genericEnv = getGenericEnvironment();
-        subMap = genericEnv->getSubstitutionMap(subs, conformances);
-      }
+      if (auto *genericSig = getGenericSignature())
+        subMap = genericSig->getSubstitutionMap(subs, conformances);
 
       return substType->getASTContext()
         .getSpecializedConformance(substType,

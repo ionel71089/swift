@@ -262,7 +262,7 @@ void TypeChecker::checkGenericParamList(GenericSignatureBuilder *builder,
             isa<AbstractFunctionDecl>(lookupDC) ||
             isa<SubscriptDecl>(lookupDC)) &&
            "not a proper generic parameter context?");
-    options = TR_GenericSignature;
+    options = TypeResolutionFlags::GenericSignature;
   }    
 
   // First, add the generic parameters to the generic signature builder.
@@ -352,6 +352,48 @@ void TypeChecker::validateRequirements(
         isErrorResult(builder->addRequirement(&req, dc->getParentModule())))
       req.setInvalid();
   }
+}
+
+std::string
+TypeChecker::gatherGenericParamBindingsText(
+                                ArrayRef<Type> types,
+                                ArrayRef<GenericTypeParamType *> genericParams,
+                                TypeSubstitutionFn substitutions) {
+  llvm::SmallPtrSet<GenericTypeParamType *, 2> knownGenericParams;
+  for (auto type : types) {
+    type.visit([&](Type type) {
+      if (auto gp = type->getAs<GenericTypeParamType>()) {
+        knownGenericParams.insert(
+            gp->getCanonicalType()->castTo<GenericTypeParamType>());
+      }
+    });
+  }
+
+  if (knownGenericParams.empty())
+    return "";
+
+  SmallString<128> result;
+  for (auto gp : genericParams) {
+    auto canonGP = gp->getCanonicalType()->castTo<GenericTypeParamType>();
+    if (!knownGenericParams.count(canonGP))
+      continue;
+
+    if (result.empty())
+      result += " [with ";
+    else
+      result += ", ";
+    result += gp->getName().str();
+    result += " = ";
+
+    auto type = substitutions(canonGP);
+    if (!type)
+      return "";
+
+    result += type.getString();
+  }
+
+  result += "]";
+  return result.str().str();
 }
 
 void
@@ -471,9 +513,9 @@ static bool checkGenericFuncSignature(TypeChecker &tc,
   if (auto fn = dyn_cast<FuncDecl>(func)) {
     if (!fn->getBodyResultTypeLoc().isNull()) {
       // Check the result type of the function.
-      TypeResolutionOptions options = TR_AllowIUO;
+      TypeResolutionOptions options = TypeResolutionFlags::AllowIUO;
       if (fn->hasDynamicSelf())
-        options |= TR_DynamicSelfResult;
+        options |= TypeResolutionFlags::DynamicSelfResult;
 
       if (tc.validateType(fn->getBodyResultTypeLoc(), fn, options, &resolver)) {
         badType = true;
@@ -931,7 +973,7 @@ static bool checkGenericSubscriptSignature(TypeChecker &tc,
 
   // Check the element type.
   badType |= tc.validateType(subscript->getElementTypeLoc(), subscript,
-                             TR_AllowIUO, &resolver);
+                             TypeResolutionFlags::AllowIUO, &resolver);
 
   // Infer requirements from it.
   if (genericParams && builder) {
@@ -946,9 +988,7 @@ static bool checkGenericSubscriptSignature(TypeChecker &tc,
 
   // Check the indices.
   auto params = subscript->getIndices();
-
-  TypeResolutionOptions options;
-  options |= TR_SubscriptParameters;
+  TypeResolutionOptions options = TypeResolutionFlags::SubscriptParameters;
 
   badType |= tc.typeCheckParameterList(params, subscript,
                                        options,
@@ -1216,7 +1256,9 @@ void TypeChecker::validateGenericTypeSignature(GenericTypeDecl *typeDecl) {
 
 RequirementCheckResult TypeChecker::checkGenericArguments(
     DeclContext *dc, SourceLoc loc, SourceLoc noteLoc, Type owner,
-    GenericSignature *genericSig, TypeSubstitutionFn substitutions,
+    ArrayRef<GenericTypeParamType *> genericParams,
+    ArrayRef<Requirement> requirements,
+    TypeSubstitutionFn substitutions,
     LookupConformanceFn conformances,
     UnsatisfiedDependency *unsatisfiedDependency,
     ConformanceCheckOptions conformanceOptions,
@@ -1224,13 +1266,16 @@ RequirementCheckResult TypeChecker::checkGenericArguments(
     SubstOptions options) {
   bool valid = true;
 
+  // We handle any conditional requirements ourselves.
+  conformanceOptions |= ConformanceCheckFlags::SkipConditionalRequirements;
+
   struct RequirementSet {
     ArrayRef<Requirement> Requirements;
     SmallVector<ParentConditionalConformance, 4> Parents;
   };
 
   SmallVector<RequirementSet, 8> pendingReqs;
-  pendingReqs.push_back({genericSig->getRequirements(), {}});
+  pendingReqs.push_back({requirements, {}});
 
   while (!pendingReqs.empty()) {
     auto current = pendingReqs.pop_back_val();
@@ -1352,9 +1397,15 @@ RequirementCheckResult TypeChecker::checkGenericArguments(
       if (loc.isValid()) {
         // FIXME: Poor source-location information.
         diagnose(loc, diagnostic, owner, firstType, secondType);
+
+        std::string genericParamBindingsText;
+        if (!genericParams.empty()) {
+          genericParamBindingsText =
+            gatherGenericParamBindingsText(
+              {rawFirstType, rawSecondType}, genericParams, substitutions);
+        }
         diagnose(noteLoc, diagnosticNote, rawFirstType, rawSecondType,
-                 genericSig->gatherGenericParamBindingsText(
-                     {rawFirstType, rawSecondType}, substitutions));
+                 genericParamBindingsText);
 
         ParentConditionalConformance::diagnoseConformanceStack(Diags, noteLoc,
                                                                current.Parents);

@@ -538,12 +538,16 @@ else()
   endif()
 endif()
 
+message(STATUS ">>> CMAKE_SYSTEM_PROCESSOR: " ${CMAKE_SYSTEM_PROCESSOR})
+
 # If SWIFT_HOST_VARIANT_ARCH not given, try to detect from the CMAKE_SYSTEM_PROCESSOR.
 if(SWIFT_HOST_VARIANT_ARCH)
   set(SWIFT_HOST_VARIANT_ARCH_default, "${SWIFT_HOST_VARIANT_ARCH}")
 else()
   if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
     set(SWIFT_HOST_VARIANT_ARCH_default "x86_64")
+  elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "i686")
+    set(SWIFT_HOST_VARIANT_ARCH_default "i686")
   elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "aarch64")
     set(SWIFT_HOST_VARIANT_ARCH_default "aarch64")
   elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "ppc64")
@@ -613,10 +617,14 @@ if("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "LINUX")
   set(SWIFT_HOST_VARIANT "linux" CACHE STRING
       "Deployment OS for Swift host tools (the compiler) [linux].")
 
+  message(STATUS ">>> SWIFT_HOST_VARIANT_ARCH: " ${SWIFT_HOST_VARIANT_ARCH})
+
   # Calculate the host triple
   if("${SWIFT_HOST_TRIPLE}" STREQUAL "")
     if("${SWIFT_HOST_VARIANT_ARCH}" STREQUAL "x86_64")
       set(SWIFT_HOST_TRIPLE "x86_64-unknown-linux-gnu")
+    elseif("${SWIFT_HOST_VARIANT_ARCH}" STREQUAL "i686")
+      set(SWIFT_HOST_TRIPLE "i686-unknown-linux-gnu")
     elseif("${SWIFT_HOST_VARIANT_ARCH}" STREQUAL "aarch64")
       set(SWIFT_HOST_TRIPLE "aarch64-unknown-linux-gnu")
     elseif("${SWIFT_HOST_VARIANT_ARCH}" MATCHES "(powerpc64|powerpc64le)")

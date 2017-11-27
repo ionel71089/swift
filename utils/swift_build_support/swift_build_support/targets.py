@@ -112,6 +112,7 @@ class StdlibDeploymentTarget(object):
                                          is_simulator=True)
 
     Linux = Platform("linux", archs=[
+	"i686",
         "x86_64",
         "armv6",
         "armv7",
@@ -174,6 +175,8 @@ class StdlibDeploymentTarget(object):
                 return StdlibDeploymentTarget.Linux.powerpc64le
             elif machine == 's390x':
                 return StdlibDeploymentTarget.Linux.s390x
+	    elif machine == 'i686':
+		return StdlibDeploymentTarget.Linux.i686
 
         elif system == 'Darwin':
             if machine == 'x86_64':

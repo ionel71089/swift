@@ -21,7 +21,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "CYGWIN")
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "i686")
-  message(STATUS ">>> This is Linux 32-bit!")
+  list(APPEND SWIFT_RUNTIME_CXX_FLAGS "-m32")
+  list(APPEND SWIFT_RUNTIME_LINK_FLAGS "-m32")
+  list(APPEND SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS "-m32")
+  list(APPEND SWIFT_RUNTIME_SWIFT_LINK_FLAGS "-m32")
 endif()
 
 # C++ code in the runtime and standard library should generally avoid

@@ -66,7 +66,7 @@ else:
 }%
 
 % if bits == 80:
-#if !os(Windows) && (arch(i386) || arch(x86_64))
+#if !os(Windows) && (arch(i386) || arch(x86_64)) && !(os(Linux) && arch(i386))
 % end
 
 ${SelfDocComment}
@@ -1354,7 +1354,7 @@ extension ${Self} : _ExpressibleByBuiltinIntegerLiteral, ExpressibleByIntegerLit
   }
 }
 
-#if !os(Windows) && (arch(i386) || arch(x86_64))
+#if !os(Windows) && (arch(i386) || arch(x86_64)) && !(os(Linux) && arch(i386))
 
 % builtinFloatLiteralBits = 80
 extension ${Self} : _ExpressibleByBuiltinFloatLiteral {
@@ -1488,7 +1488,7 @@ extension ${Self} {
   public init(_ v: ${That}) {
     _value = Builtin.${sign}itofp_${ThatBuiltinName}_FPIEEE${bits}(v._value)
   }
-  
+
   /// Creates a value that exactly represents the given integer.
   ///
   /// If the given integer is outside the representable range of this type or
@@ -1520,7 +1520,7 @@ extension ${Self} {
 %   That = src_type.stdlib_name
 
 %   if srcBits == 80:
-#if !os(Windows) && (arch(i386) || arch(x86_64))
+#if !os(Windows) && (arch(i386) || arch(x86_64)) && !(os(Linux) && arch(i386))
 %   end
 
 %   if srcBits == bits:

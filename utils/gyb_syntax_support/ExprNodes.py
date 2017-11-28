@@ -19,6 +19,9 @@ EXPR_NODES = [
     Node('FunctionCallArgumentList', kind='SyntaxCollection',
          element='FunctionCallArgument'),
 
+    Node('TupleElementList', kind='SyntaxCollection',
+         element='TupleElement'),
+
     Node('ArrayElementList', kind='SyntaxCollection',
          element='ArrayElement'),
 
@@ -58,6 +61,18 @@ EXPR_NODES = [
              Child('Wildcard', kind='WildcardToken'),
          ]),
 
+    # An = expression.
+    Node('AssignmentExpr', kind='Expr',
+         children=[
+             Child('AssignToken', kind='EqualToken'),
+         ]),
+
+    # A flat list of expressions before sequence folding, e.g. 1 + 2 + 3.
+    Node('SequenceExpr', kind='Expr',
+         children=[
+             Child('Elements', kind='ExprList'),
+         ]),
+
     # A #line expression.
     Node('PoundLineExpr', kind='Expr',
          children=[
@@ -94,6 +109,12 @@ EXPR_NODES = [
              Child('PostfixExpression', kind='Expr'),
          ]),
 
+    # An operator like + or -.
+    Node('BinaryOperatorExpr', kind='Expr',
+         children=[
+             Child('OperatorToken', kind='BinaryOperatorToken'),
+         ]),
+
     # A floating-point literal
     # 4.0
     # -3.9
@@ -110,6 +131,13 @@ EXPR_NODES = [
              Child('CalledExpression', kind='Expr'),
              Child('LeftParen', kind='LeftParenToken'),
              Child('ArgumentList', kind='FunctionCallArgumentList'),
+             Child('RightParen', kind='RightParenToken'),
+         ]),
+
+    Node('TupleExpr', kind='Expr',
+         children=[
+             Child('LeftParen', kind='LeftParenToken'),
+             Child('ElementList', kind='TupleElementList'),
              Child('RightParen', kind='RightParenToken'),
          ]),
 
@@ -131,6 +159,18 @@ EXPR_NODES = [
 
     # function-call-argument -> label? ':'? expression ','?
     Node('FunctionCallArgument', kind='Syntax',
+         children=[
+             Child('Label', kind='IdentifierToken',
+                   is_optional=True),
+             Child('Colon', kind='ColonToken',
+                   is_optional=True),
+             Child('Expression', kind='Expr'),
+             Child('TrailingComma', kind='CommaToken',
+                   is_optional=True),
+         ]),
+
+    # An element inside a tuple element list
+    Node('TupleElement', kind='Syntax',
          children=[
              Child('Label', kind='IdentifierToken',
                    is_optional=True),

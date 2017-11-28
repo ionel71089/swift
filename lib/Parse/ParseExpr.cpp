@@ -217,6 +217,8 @@ parse_operator:
         goto done;
       
       // Parse the operator.
+      SyntaxParsingContext OperatorContext(SyntaxContext,
+                                           SyntaxKind::BinaryOperatorExpr);
       Expr *Operator = parseExprOperator();
       SequencedExprs.push_back(Operator);
       
@@ -267,7 +269,8 @@ parse_operator:
       // as a binary operator.
       if (InVarOrLetPattern)
         goto done;
-      
+      SyntaxParsingContext AssignContext(SyntaxContext,
+                                         SyntaxKind::AssignmentExpr);
       SourceLoc equalsLoc = consumeToken();
       auto *assign = new (Context) AssignExpr(equalsLoc);
       SequencedExprs.push_back(assign);
@@ -362,6 +365,8 @@ done:
     return Result;
   }
 
+  ExprSequnceContext.createNodeInPlace(SyntaxKind::ExprList);
+  ExprSequnceContext.setCreateSyntax(SyntaxKind::SequenceExpr);
   auto Result = makeParserResult(SequenceExpr::create(Context, SequencedExprs));
   if (HasCodeCompletion)
     Result.setHasCodeCompletion();
@@ -1677,11 +1682,17 @@ ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
     break;
   }
 
-  case tok::l_paren:
+  case tok::l_paren: {
+    // Build a tuple expression syntax node.
+    // AST differentiates paren and tuple expression where the former allows
+    // only one element without label. However, libSyntax tree doesn't have this
+    // differentiation. A tuple expression node in libSyntax can have a single
+    // element without label.
+    SyntaxParsingContext TupleContext(SyntaxContext, SyntaxKind::TupleExpr);
     Result = parseExprList(tok::l_paren, tok::r_paren,
-                           SyntaxKind::FunctionCallArgumentList);
+                           SyntaxKind::TupleElementList);
     break;
-
+  }
   case tok::l_square:
     Result = parseExprCollection();
     break;

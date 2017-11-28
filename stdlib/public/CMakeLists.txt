@@ -20,8 +20,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "CYGWIN")
   list(APPEND SWIFT_RUNTIME_CORE_CXX_FLAGS "-mcmodel=large")
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  message(STATUS ">>> This is Linux!")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" && CMAKE_SYSTEM_PROCESSOR} STREQUAL "i686")
+  message(STATUS ">>> This is Linux 32-bit!")
 endif()
 
 # C++ code in the runtime and standard library should generally avoid

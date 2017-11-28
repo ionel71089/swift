@@ -20,6 +20,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "CYGWIN")
   list(APPEND SWIFT_RUNTIME_CORE_CXX_FLAGS "-mcmodel=large")
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(STATUS ">>> This is Linux!")
+endif()
+
 # C++ code in the runtime and standard library should generally avoid
 # introducing static constructors or destructors.
 check_cxx_compiler_flag("-Werror -Wglobal-constructors" CXX_SUPPORTS_GLOBAL_CONSTRUCTORS_WARNING)

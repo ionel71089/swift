@@ -390,7 +390,7 @@ internal struct _Buffer72 {
 % for bits in [ 32, 64, 80 ]:
 
 % if bits == 80:
-#if !os(Windows) && (arch(i386) || arch(x86_64))
+#if !os(Windows) && (arch(i386) || arch(x86_64)) && !(os(Linux) && arch(i386))
 % end
 
 @_inlineable // FIXME(sil-serialize-all)

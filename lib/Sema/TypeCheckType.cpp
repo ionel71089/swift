@@ -75,15 +75,6 @@ Type TypeChecker::getOptionalType(SourceLoc loc, Type elementType) {
   return OptionalType::get(elementType);
 }
 
-Type TypeChecker::getImplicitlyUnwrappedOptionalType(SourceLoc loc, Type elementType) {
-  if (!Context.getImplicitlyUnwrappedOptionalDecl()) {
-    diagnose(loc, diag::sugar_type_not_found, 2);
-    return Type();
-  }
-
-  return ImplicitlyUnwrappedOptionalType::get(elementType);
-}
-
 static Type getPointerType(TypeChecker &tc, SourceLoc loc, Type pointeeType,
                            PointerTypeKind kind) {
   auto pointerDecl = [&] {
@@ -223,8 +214,7 @@ TypeChecker::getDynamicBridgedThroughObjCClass(DeclContext *dc,
                                                Type dynamicType,
                                                Type valueType) {
   // We can only bridge from class or Objective-C existential types.
-  if (!dynamicType->isObjCExistentialType() &&
-      !dynamicType->mayHaveSuperclass())
+  if (!dynamicType->satisfiesClassConstraint())
     return Type();
 
   // If the value type cannot be bridged, we're done.
@@ -232,14 +222,6 @@ TypeChecker::getDynamicBridgedThroughObjCClass(DeclContext *dc,
     return Type();
 
   return Context.getBridgedToObjC(dc, valueType);
-}
-
-void TypeChecker::forceExternalDeclMembers(NominalTypeDecl *nominalDecl) {
-  // Force any delayed members added to the nominal type declaration.
-  if (nominalDecl->hasDelayedMembers()) {
-    this->handleExternalDecl(nominalDecl);
-    nominalDecl->setHasDelayedMembers(false);
-  }
 }
 
 Type TypeChecker::resolveTypeInContext(
@@ -265,7 +247,6 @@ Type TypeChecker::resolveTypeInContext(
   if (auto nominalType = dyn_cast<NominalTypeDecl>(typeDecl)) {
     if (!isa<ProtocolDecl>(nominalType) &&
         (!nominalType->getGenericParams() || !isSpecialized)) {
-      forceExternalDeclMembers(nominalType);
       for (auto parentDC = fromDC;
            !parentDC->isModuleScopeContext();
            parentDC = parentDC->getParent()) {
@@ -443,7 +424,7 @@ Type TypeChecker::applyGenericArguments(Type type, TypeDecl *decl,
   // In SIL mode, Optional<T> interprets T as a SIL type.
   if (options.contains(TypeResolutionFlags::SILType)) {
     if (auto nominal = dyn_cast<NominalTypeDecl>(decl)) {
-      if (nominal->classifyAsOptionalType()) {
+      if (nominal->isOptionalDecl()) {
         // Validate the generic argument.
         TypeLoc arg = genericArgs[0];
         if (validateType(arg, dc, withoutContext(options, true), resolver))
@@ -1024,7 +1005,8 @@ resolveGenericSignatureComponent(TypeChecker &TC, DeclContext *DC,
   }
 
   // If the lookup occurs from within a trailing 'where' clause of
-  // a constrained extension, also look for associated types.
+  // a constrained extension, also look for associated types and typealiases
+  // in the protocol.
   if (genericParams->hasTrailingWhereClause() &&
       comp->getIdLoc().isValid() &&
       TC.Context.SourceMgr.rangeContainsTokenLoc(
@@ -1047,12 +1029,15 @@ resolveGenericSignatureComponent(TypeChecker &TC, DeclContext *DC,
                             decls)) {
       for (const auto decl : decls) {
         // FIXME: Better ambiguity handling.
-        if (auto assocType = dyn_cast<AssociatedTypeDecl>(decl)) {
-          comp->setValue(assocType, DC);
-          return resolveTopLevelIdentTypeComponent(TC, DC, comp, options,
-                                                   diagnoseErrors, resolver,
-                                                   unsatisfiedDependency);
-        }
+        auto typeDecl = dyn_cast<TypeDecl>(decl);
+        if (!typeDecl) continue;
+
+        if (!isa<ProtocolDecl>(typeDecl->getDeclContext())) continue;
+
+        comp->setValue(typeDecl, DC);
+        return resolveTopLevelIdentTypeComponent(TC, DC, comp, options,
+                                                 diagnoseErrors, resolver,
+                                                 unsatisfiedDependency);
       }
     }
   }
@@ -1130,14 +1115,6 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
 
   auto id = comp->getIdentifier();
 
-  // If we're compiling for Swift version < 5 and we have a mention of
-  // ImplicitlyUnwrappedOptional where it is not allowed, treat it as
-  // if it was spelled Optional.
-  if (id == TC.Context.Id_ImplicitlyUnwrappedOptional
-      && !options.contains(TypeResolutionFlags::AllowIUO)
-      && !TC.Context.isSwiftVersionAtLeast(5))
-    id = TC.Context.Id_Optional;
-
   NameLookupOptions lookupOptions = defaultUnqualifiedLookupOptions;
   if (options.contains(TypeResolutionFlags::KnownNonCascadingDependency))
     lookupOptions |= NameLookupFlags::KnownPrivate;
@@ -1154,11 +1131,6 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
   for (const auto entry : globals) {
     auto *foundDC = entry.getDeclContext();
     auto *typeDecl = cast<TypeDecl>(entry.getValueDecl());
-
-    // If necessary, add delayed members to the declaration.
-    if (auto nomDecl = dyn_cast<NominalTypeDecl>(typeDecl)) {
-      TC.forceExternalDeclMembers(nomDecl);
-    }
 
     Type type = resolveTypeDecl(TC, typeDecl, comp->getIdLoc(),
                                 foundDC, DC,
@@ -1203,71 +1175,6 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
 
     comp->setInvalid();
     return ErrorType::get(TC.Context);
-  }
-
-  // Emit diagnostics related to ImplicitlyUnwrappedOptional.
-  if (comp->getIdentifier() == TC.Context.Id_ImplicitlyUnwrappedOptional) {
-    if (options.contains(TypeResolutionFlags::AllowIUO)) {
-      if (isa<GenericIdentTypeRepr>(comp)) {
-        auto *genericTyR = cast<GenericIdentTypeRepr>(comp);
-        assert(genericTyR->getGenericArgs().size() == 1);
-        auto *genericArgTyR = genericTyR->getGenericArgs()[0];
-
-        Diagnostic diag = diag::implicitly_unwrapped_optional_spelling_deprecated_with_fixit;
-
-        // For Swift 5 and later, spelling the full name is an error.
-        if (TC.Context.isSwiftVersionAtLeast(5))
-          diag = diag::
-              implicitly_unwrapped_optional_spelling_error_with_bang_fixit;
-
-        TC.diagnose(comp->getStartLoc(), diag)
-          .fixItRemoveChars(
-              genericTyR->getStartLoc(),
-              genericTyR->getAngleBrackets().Start.getAdvancedLoc(1))
-          .fixItInsertAfter(genericArgTyR->getEndLoc(), "!")
-          .fixItRemoveChars(
-              genericTyR->getAngleBrackets().End,
-              genericTyR->getAngleBrackets().End.getAdvancedLoc(1));
-      } else {
-        Diagnostic diag = diag::implicitly_unwrapped_optional_spelling_deprecated;
-
-        // For Swift 5 and later, spelling the full name is an error.
-        if (TC.Context.isSwiftVersionAtLeast(5))
-          diag = diag::implicitly_unwrapped_optional_spelling_error;
-
-        TC.diagnose(comp->getStartLoc(), diag);
-      }
-    } else if (isa<GenericIdentTypeRepr>(comp)) {
-      Diagnostic diag =
-          diag::implicitly_unwrapped_optional_spelling_decay_to_optional;
-
-      if (TC.Context.isSwiftVersionAtLeast(5))
-        diag = diag::implicitly_unwrapped_optional_spelling_in_illegal_position;
-
-      auto *genericTyR = cast<GenericIdentTypeRepr>(comp);
-      assert(genericTyR->getGenericArgs().size() == 1);
-      auto *genericArgTyR = genericTyR->getGenericArgs()[0];
-
-      TC.diagnose(comp->getStartLoc(), diag)
-          .fixItRemoveChars(
-              genericTyR->getStartLoc(),
-              genericTyR->getAngleBrackets().Start.getAdvancedLoc(1))
-          .fixItInsertAfter(genericArgTyR->getEndLoc(), "?")
-          .fixItRemoveChars(
-              genericTyR->getAngleBrackets().End,
-              genericTyR->getAngleBrackets().End.getAdvancedLoc(1));
-    } else {
-      Diagnostic diag =
-          diag::implicitly_unwrapped_optional_spelling_decay_to_optional;
-
-      if (TC.Context.isSwiftVersionAtLeast(5))
-        diag = diag::
-            implicitly_unwrapped_optional_spelling_error_with_optional_fixit;
-
-      SourceRange R = SourceRange(comp->getIdLoc());
-
-      TC.diagnose(comp->getStartLoc(), diag).fixItReplace(R, "Optional");
-    }
   }
 
   // If we found nothing, complain and give ourselves a chance to recover.
@@ -1829,14 +1736,12 @@ Type TypeResolver::resolveType(TypeRepr *repr, TypeResolutionOptions options) {
 }
 
 static Type rebuildWithDynamicSelf(ASTContext &Context, Type ty) {
-  OptionalTypeKind OTK;
   if (auto metatypeTy = ty->getAs<MetatypeType>()) {
     return MetatypeType::get(
         rebuildWithDynamicSelf(Context, metatypeTy->getInstanceType()),
         metatypeTy->getRepresentation());
-  } else if (auto optionalTy = ty->getAnyOptionalObjectType(OTK)) {
-    return OptionalType::get(
-        OTK, rebuildWithDynamicSelf(Context, optionalTy));
+  } else if (auto optionalTy = ty->getOptionalObjectType()) {
+    return OptionalType::get(rebuildWithDynamicSelf(Context, optionalTy));
   } else {
     return DynamicSelfType::get(ty, Context);
   }
@@ -2199,7 +2104,7 @@ Type TypeResolver::resolveAttributedType(TypeAttributes &attrs,
     if (auto SF = DC->getParentSourceFile()) {
       if (SF->Kind == SourceFileKind::SIL) {
         if (((attrs.has(TAK_sil_weak) || attrs.has(TAK_sil_unmanaged)) &&
-             ty->getAnyOptionalObjectType()) ||
+             ty->getOptionalObjectType()) ||
             (!attrs.has(TAK_sil_weak) && ty->hasReferenceSemantics())) {
           ty = ReferenceStorageType::get(ty, attrs.getOwnership(), Context);
           attrs.clearOwnership();
@@ -2371,9 +2276,8 @@ Type TypeResolver::resolveSILBoxType(SILBoxTypeRepr *repr,
   SmallVector<Substitution, 4> genericArgs;
   if (genericSig) {
     TypeSubstitutionMap genericArgMap;
-    ArrayRef<GenericTypeParamType *> params;
 
-    params = genericSig->getGenericParams();
+    auto params = genericSig->getGenericParams();
     if (repr->getGenericArguments().size()
           != genericSig->getSubstitutionListSize()) {
       TC.diagnose(repr->getLoc(), diag::sil_box_arg_mismatch);
@@ -2847,7 +2751,7 @@ Type TypeResolver::resolveImplicitlyUnwrappedOptionalType(
        TypeResolutionOptions options) {
   if (!options.contains(TypeResolutionFlags::AllowIUO)) {
     Diagnostic diag = diag::
-        implicitly_unwrapped_optional_in_illegal_position_decay_to_optional;
+        implicitly_unwrapped_optional_in_illegal_position_interpreted_as_optional;
 
     if (TC.Context.isSwiftVersionAtLeast(5))
       diag = diag::implicitly_unwrapped_optional_in_illegal_position;
@@ -2865,12 +2769,7 @@ Type TypeResolver::resolveImplicitlyUnwrappedOptionalType(
   if (!baseTy || baseTy->hasError()) return baseTy;
 
   Type uncheckedOptionalTy;
-  if (!options.contains(TypeResolutionFlags::AllowIUO))
-    // Treat IUOs in illegal positions as optionals.
-    uncheckedOptionalTy = TC.getOptionalType(repr->getExclamationLoc(), baseTy);
-  else
-    uncheckedOptionalTy = TC.getImplicitlyUnwrappedOptionalType(
-        repr->getExclamationLoc(), baseTy);
+  uncheckedOptionalTy = TC.getOptionalType(repr->getExclamationLoc(), baseTy);
 
   if (!uncheckedOptionalTy)
     return ErrorType::get(Context);
@@ -3548,61 +3447,59 @@ bool TypeChecker::isRepresentableInObjC(
     return false;
   }
 
-  if (auto *FD = dyn_cast<FuncDecl>(AFD)) {
-    if (FD->isAccessor()) {
-      // Accessors can only be @objc if the storage declaration is.
-      // Global computed properties may however @_cdecl their accessors.
-      auto storage = FD->getAccessorStorageDecl();
-      validateDecl(storage);
-      if (!storage->isObjC() && Reason != ObjCReason::ExplicitlyCDecl &&
-          Reason != ObjCReason::WitnessToObjC) {
-        if (Diagnose) {
-          auto error = FD->isGetter()
-                    ? (isa<VarDecl>(storage) 
-                         ? diag::objc_getter_for_nonobjc_property
-                         : diag::objc_getter_for_nonobjc_subscript)
-                    : (isa<VarDecl>(storage)
-                         ? diag::objc_setter_for_nonobjc_property
-                         : diag::objc_setter_for_nonobjc_subscript);
+  if (auto accessor = dyn_cast<AccessorDecl>(AFD)) {
+    // Accessors can only be @objc if the storage declaration is.
+    // Global computed properties may however @_cdecl their accessors.
+    auto storage = accessor->getStorage();
+    validateDecl(storage);
+    if (!storage->isObjC() && Reason != ObjCReason::ExplicitlyCDecl &&
+        Reason != ObjCReason::WitnessToObjC) {
+      if (Diagnose) {
+        auto error = accessor->isGetter()
+                  ? (isa<VarDecl>(storage) 
+                       ? diag::objc_getter_for_nonobjc_property
+                       : diag::objc_getter_for_nonobjc_subscript)
+                  : (isa<VarDecl>(storage)
+                       ? diag::objc_setter_for_nonobjc_property
+                       : diag::objc_setter_for_nonobjc_subscript);
 
-          diagnose(FD->getLoc(), error);
-          describeObjCReason(*this, AFD, Reason);
-        }
-        return false;
+        diagnose(accessor->getLoc(), error);
+        describeObjCReason(*this, accessor, Reason);
       }
-
-      switch (FD->getAccessorKind()) {
-      case AccessorKind::NotAccessor:
-        llvm_unreachable("already checking for accessor-ness");
-
-      case AccessorKind::IsDidSet:
-      case AccessorKind::IsWillSet:
-          // willSet/didSet implementations are never exposed to objc, they are
-          // always directly dispatched from the synthesized setter.
-        if (Diagnose) {
-          diagnose(AFD->getLoc(), diag::objc_observing_accessor);
-          describeObjCReason(*this, AFD, Reason);
-        }
-        return false;
-
-      case AccessorKind::IsGetter:
-      case AccessorKind::IsSetter:
-        return true;
-
-      case AccessorKind::IsMaterializeForSet:
-        // materializeForSet is synthesized, so never complain about it
-        return false;
-
-      case AccessorKind::IsAddressor:
-      case AccessorKind::IsMutableAddressor:
-        if (Diagnose) {
-          diagnose(AFD->getLoc(), diag::objc_addressor);
-          describeObjCReason(*this, AFD, Reason);
-        }
-        return false;
-      }
+      return false;
     }
 
+    switch (accessor->getAccessorKind()) {
+    case AccessorKind::IsDidSet:
+    case AccessorKind::IsWillSet:
+        // willSet/didSet implementations are never exposed to objc, they are
+        // always directly dispatched from the synthesized setter.
+      if (Diagnose) {
+        diagnose(accessor->getLoc(), diag::objc_observing_accessor);
+        describeObjCReason(*this, accessor, Reason);
+      }
+      return false;
+
+    case AccessorKind::IsGetter:
+    case AccessorKind::IsSetter:
+      return true;
+
+    case AccessorKind::IsMaterializeForSet:
+      // materializeForSet is synthesized, so never complain about it
+      return false;
+
+    case AccessorKind::IsAddressor:
+    case AccessorKind::IsMutableAddressor:
+      if (Diagnose) {
+        diagnose(accessor->getLoc(), diag::objc_addressor);
+        describeObjCReason(*this, accessor, Reason);
+      }
+      return false;
+    }
+    llvm_unreachable("bad kind");
+  }
+
+  if (auto *FD = dyn_cast<FuncDecl>(AFD)) {
     unsigned ExpectedParamPatterns = 1;
     if (FD->getImplicitSelfDecl())
       ExpectedParamPatterns++;
@@ -3709,12 +3606,12 @@ bool TypeChecker::isRepresentableInObjC(
       }
 
       errorResultType = boolDecl->getDeclaredType()->getCanonicalType();
-    } else if (!resultType->getAnyOptionalObjectType() &&
+    } else if (!resultType->getOptionalObjectType() &&
                isBridgedToObjectiveCClass(dc, resultType)) {
       // Functions that return a (non-optional) type bridged to Objective-C
       // can be throwing; they indicate failure with a nil result.
       kind = ForeignErrorConvention::NilResult;
-    } else if ((optOptionalType = resultType->getAnyOptionalObjectType()) &&
+    } else if ((optOptionalType = resultType->getOptionalObjectType()) &&
                isBridgedToObjectiveCClass(dc, optOptionalType)) {
       // Cannot return an optional bridged type, because 'nil' is reserved
       // to indicate failure. Call this out in a separate diagnostic.
@@ -3806,7 +3703,7 @@ bool TypeChecker::isRepresentableInObjC(
         type = type->getRValueType();
         
         // Look through one level of optionality.
-        if (auto objectType = type->getAnyOptionalObjectType())
+        if (auto objectType = type->getOptionalObjectType())
           type = objectType;
         
         // Is it a function type?
@@ -3965,6 +3862,26 @@ bool TypeChecker::isRepresentableInObjC(const SubscriptDecl *SD,
   describeObjCReason(*this, SD, Reason);
 
   return Result;
+}
+
+bool TypeChecker::canBeRepresentedInObjC(const ValueDecl *decl) {
+  if (!Context.LangOpts.EnableObjCInterop)
+    return false;
+
+  if (auto func = dyn_cast<AbstractFunctionDecl>(decl)) {
+    Optional<ForeignErrorConvention> errorConvention;
+    return isRepresentableInObjC(func, ObjCReason::MemberOfObjCMembersClass,
+                                 errorConvention);
+  }
+
+  if (auto var = dyn_cast<VarDecl>(decl))
+    return isRepresentableInObjC(var, ObjCReason::MemberOfObjCMembersClass);
+
+  if (auto subscript = dyn_cast<SubscriptDecl>(decl))
+    return isRepresentableInObjC(subscript,
+                                 ObjCReason::MemberOfObjCMembersClass);
+
+  return false;
 }
 
 void TypeChecker::diagnoseTypeNotRepresentableInObjC(const DeclContext *DC,

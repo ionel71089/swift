@@ -104,6 +104,7 @@ public:
       DEF_COL(ID::SILUndef, RED)
       DEF_COL(ID::SILBasicBlock, GREEN)
       DEF_COL(ID::SSAValue, MAGENTA)
+      DEF_COL(ID::Null, YELLOW)
     }
     OS.resetColor();
     OS.changeColor(Color);
@@ -128,6 +129,7 @@ void SILPrintContext::ID::print(raw_ostream &OS) {
     return;
   case ID::SILBasicBlock: OS << "bb"; break;
   case ID::SSAValue: OS << '%'; break;
+  case ID::Null: OS << "<<NULL OPERAND>>"; return;
   }
   OS << Number;
 }
@@ -276,39 +278,41 @@ void SILDeclRef::print(raw_ostream &OS) const {
     OS << "<anonymous function>";
   } else if (kind == SILDeclRef::Kind::Func) {
     auto *FD = cast<FuncDecl>(getDecl());
-    switch (FD->getAccessorKind()) {
-    case AccessorKind::IsWillSet:
-      printValueDecl(FD->getAccessorStorageDecl(), OS);
-      OS << "!willSet";
-      break;
-    case AccessorKind::IsDidSet:
-      printValueDecl(FD->getAccessorStorageDecl(), OS);
-      OS << "!didSet";
-      break;
-    case AccessorKind::NotAccessor:
+    auto accessor = dyn_cast<AccessorDecl>(FD);
+    if (!accessor) {
       printValueDecl(FD, OS);
       isDot = false;
-      break;
-    case AccessorKind::IsGetter:
-      printValueDecl(FD->getAccessorStorageDecl(), OS);
-      OS << "!getter";
-      break;
-    case AccessorKind::IsSetter:
-      printValueDecl(FD->getAccessorStorageDecl(), OS);
-      OS << "!setter";
-      break;
-    case AccessorKind::IsMaterializeForSet:
-      printValueDecl(FD->getAccessorStorageDecl(), OS);
-      OS << "!materializeForSet";
-      break;
-    case AccessorKind::IsAddressor:
-      printValueDecl(FD->getAccessorStorageDecl(), OS);
-      OS << "!addressor";
-      break;
-    case AccessorKind::IsMutableAddressor:
-      printValueDecl(FD->getAccessorStorageDecl(), OS);
-      OS << "!mutableAddressor";
-      break;
+    } else {
+      switch (accessor->getAccessorKind()) {
+      case AccessorKind::IsWillSet:
+        printValueDecl(accessor->getStorage(), OS);
+        OS << "!willSet";
+        break;
+      case AccessorKind::IsDidSet:
+        printValueDecl(accessor->getStorage(), OS);
+        OS << "!didSet";
+        break;
+      case AccessorKind::IsGetter:
+        printValueDecl(accessor->getStorage(), OS);
+        OS << "!getter";
+        break;
+      case AccessorKind::IsSetter:
+        printValueDecl(accessor->getStorage(), OS);
+        OS << "!setter";
+        break;
+      case AccessorKind::IsMaterializeForSet:
+        printValueDecl(accessor->getStorage(), OS);
+        OS << "!materializeForSet";
+        break;
+      case AccessorKind::IsAddressor:
+        printValueDecl(accessor->getStorage(), OS);
+        OS << "!addressor";
+        break;
+      case AccessorKind::IsMutableAddressor:
+        printValueDecl(accessor->getStorage(), OS);
+        OS << "!mutableAddressor";
+        break;
+      }
     }
   } else {
     printValueDecl(getDecl(), OS);
@@ -339,9 +343,6 @@ void SILDeclRef::print(raw_ostream &OS) const {
     break;
   case SILDeclRef::Kind::GlobalAccessor:
     OS << "!globalaccessor";
-    break;
-  case SILDeclRef::Kind::GlobalGetter:
-    OS << "!globalgetter";
     break;
   case SILDeclRef::Kind::DefaultArgGenerator:
     OS << "!defaultarg" << "." << defaultArgIndex;
@@ -509,10 +510,10 @@ public:
   }
 
   SILValuePrinterInfo getIDAndType(SILValue V) {
-    return {Ctx.getID(V), V->getType()};
+    return {Ctx.getID(V), V ? V->getType() : SILType()};
   }
   SILValuePrinterInfo getIDAndTypeAndOwnership(SILValue V) {
-    return {Ctx.getID(V), V->getType(), V.getOwnershipKind()};
+    return {Ctx.getID(V), V ? V->getType() : SILType(), V.getOwnershipKind()};
   }
 
   //===--------------------------------------------------------------------===//
@@ -1012,16 +1013,16 @@ public:
     }
   }
 
-  void printDebugVar(SILDebugVariable Var) {
-    if (Var.Name.empty())
+  void printDebugVar(Optional<SILDebugVariable> Var) {
+    if (!Var || Var->Name.empty())
       return;
-    if (Var.Constant)
+    if (Var->Constant)
       *this << ", let";
     else
       *this << ", var";
-    *this << ", name \"" << Var.Name << '"';
-    if (Var.ArgNo)
-      *this << ", argno " << Var.ArgNo;
+    *this << ", name \"" << Var->Name << '"';
+    if (Var->ArgNo)
+      *this << ", argno " << Var->ArgNo;
   }
 
   void visitAllocStackInst(AllocStackInst *AVI) {
@@ -1081,7 +1082,11 @@ public:
     interleave(AI->getArguments(),
                [&](const SILValue &arg) { *this << Ctx.getID(arg); },
                [&] { *this << ", "; });
-    *this << ") : " << AI->getCallee()->getType();
+    *this << ") : ";
+    if (auto callee = AI->getCallee())
+      *this << callee->getType();
+    else
+      *this << "<<NULL CALLEE>>";
   }
 
   void visitApplyInst(ApplyInst *AI) {
@@ -1290,6 +1295,9 @@ public:
     switch (MU->getKind()) {
     case MarkUninitializedInst::Var: *this << "[var] "; break;
     case MarkUninitializedInst::RootSelf:  *this << "[rootself] "; break;
+    case MarkUninitializedInst::CrossModuleRootSelf:
+      *this << "[crossmodulerootself] ";
+      break;
     case MarkUninitializedInst::DerivedSelf:  *this << "[derivedself] "; break;
     case MarkUninitializedInst::DerivedSelfOnly:
       *this << "[derivedselfonly] ";
@@ -1422,6 +1430,9 @@ public:
   }
 
   void visitConvertFunctionInst(ConvertFunctionInst *CI) {
+    printUncheckedConversionInst(CI, CI->getOperand());
+  }
+  void visitConvertEscapeToNoEscapeInst(ConvertEscapeToNoEscapeInst *CI) {
     printUncheckedConversionInst(CI, CI->getOperand());
   }
   void visitThinFunctionToPointerInst(ThinFunctionToPointerInst *CI) {
@@ -1669,8 +1680,6 @@ public:
     PrintOptions QualifiedSILTypeOptions =
         PrintOptions::printQualifiedSILType();
     QualifiedSILTypeOptions.CurrentModule = WMI->getModule().getSwiftModule();
-    if (WMI->isVolatile())
-      *this << "[volatile] ";
     *this << "$" << WMI->getLookupType() << ", " << WMI->getMember() << " : ";
     WMI->getMember().getDecl()->getInterfaceType().print(
         PrintState.OS, QualifiedSILTypeOptions);
@@ -1755,7 +1764,12 @@ public:
   void visitEndLifetimeInst(EndLifetimeInst *ELI) {
     *this << getIDAndType(ELI->getOperand());
   }
-
+  void visitValueToBridgeObjectInst(ValueToBridgeObjectInst *VBOI) {
+    *this << getIDAndType(VBOI->getOperand());
+  }
+  void visitClassifyBridgeObjectInst(ClassifyBridgeObjectInst *CBOI) {
+    *this << getIDAndType(CBOI->getOperand());
+  }
   void visitMarkDependenceInst(MarkDependenceInst *MDI) {
     *this << getIDAndType(MDI->getValue()) << " on "
           << getIDAndType(MDI->getBase());
@@ -2002,7 +2016,21 @@ public:
       *this << "objc \"" << pattern->getObjCString() << "\"; ";
     
     *this << "root $" << KPI->getPattern()->getRootType();
-    
+
+    auto printComponentIndices =
+      [&](ArrayRef<KeyPathPatternComponent::Index> indices) {
+        *this << '[';
+        interleave(indices,
+          [&](const KeyPathPatternComponent::Index &i) {
+            *this << "%$" << i.Operand << " : $"
+                  << i.FormalType << " : "
+                  << i.LoweredType;
+          }, [&]{
+            *this << ", ";
+          });
+        *this << ']';
+      };
+
     for (auto &component : pattern->getComponents()) {
       *this << "; ";
       
@@ -2050,24 +2078,17 @@ public:
                 << component.getComputedPropertySetter()->getLoweredType();
         }
         
-        if (!component.getComputedPropertyIndices().empty()) {
-          *this << ", indices [";
-          interleave(component.getComputedPropertyIndices(),
-            [&](const KeyPathPatternComponent::Index &i) {
-              *this << "%$" << i.Operand << " : $"
-                    << i.FormalType << " : "
-                    << i.LoweredType;
-            }, [&]{
-              *this << ", ";
-            });
-          *this << "], indices_equals ";
-          component.getComputedPropertyIndexEquals()->printName(PrintState.OS);
+        if (!component.getSubscriptIndices().empty()) {
+          *this << ", indices ";
+          printComponentIndices(component.getSubscriptIndices());
+          *this << ", indices_equals ";
+          component.getSubscriptIndexEquals()->printName(PrintState.OS);
           *this << " : "
-                << component.getComputedPropertyIndexEquals()->getLoweredType();
+                << component.getSubscriptIndexEquals()->getLoweredType();
           *this << ", indices_hash ";
-          component.getComputedPropertyIndexHash()->printName(PrintState.OS);
+          component.getSubscriptIndexHash()->printName(PrintState.OS);
           *this << " : "
-                << component.getComputedPropertyIndexHash()->getLoweredType();
+                << component.getSubscriptIndexHash()->getLoweredType();
         }
         break;
       }
@@ -2089,6 +2110,19 @@ public:
         }
         *this << component.getComponentType();
         break;
+      }
+      case KeyPathPatternComponent::Kind::External: {
+        *this << "external #";
+        printValueDecl(component.getExternalDecl(), PrintState.OS);
+        if (!component.getExternalSubstitutions().empty()) {
+          printSubstitutions(component.getExternalSubstitutions());
+        }
+        
+        if (!component.getSubscriptIndices().empty()) {
+          printComponentIndices(component.getSubscriptIndices());
+        }
+        
+        *this << " : $" << component.getComponentType();
       }
       }
     }
@@ -2184,6 +2218,7 @@ void SILFunction::dump(const char *FileName) const {
 static StringRef getLinkageString(SILLinkage linkage) {
   switch (linkage) {
   case SILLinkage::Public: return "public ";
+  case SILLinkage::PublicNonABI: return "non_abi ";
   case SILLinkage::Hidden: return "hidden ";
   case SILLinkage::Shared: return "shared ";
   case SILLinkage::Private: return "private ";
@@ -2245,7 +2280,9 @@ void SILFunction::print(SILPrintContext &PrintCtx) const {
 
   if (isGlobalInit())
     OS << "[global_init] ";
-  
+  if (isWeakLinked())
+    OS << "[_weakLinked] ";
+
   switch (getInlineStrategy()) {
     case NoInline: OS << "[noinline] "; break;
     case AlwaysInline: OS << "[always_inline] "; break;
@@ -2556,9 +2593,9 @@ void SILModule::print(SILPrintContext &PrintCtx, ModuleDecl *M,
   OS << "\n\nimport Builtin\nimport " << STDLIB_NAME
      << "\nimport SwiftShims" << "\n\n";
 
-  // Print the declarations and types from the origin module, unless we're not
-  // in whole-module mode.
-  if (M && AssociatedDeclContext == M && PrintASTDecls) {
+  // Print the declarations and types from the associated context (origin module or
+  // current file).
+  if (M && PrintASTDecls) {
     PrintOptions Options = PrintOptions::printSIL();
     Options.TypeDefinitions = true;
     Options.VarInitializers = true;
@@ -2568,16 +2605,18 @@ void SILModule::print(SILPrintContext &PrintCtx, ModuleDecl *M,
     Options.PrintGetSetOnRWProperties = true;
     Options.PrintInSILBody = false;
     Options.PrintDefaultParameterPlaceholder = false;
+    bool WholeModuleMode = (M == AssociatedDeclContext);
 
     SmallVector<Decl *, 32> topLevelDecls;
     M->getTopLevelDecls(topLevelDecls);
     for (const Decl *D : topLevelDecls) {
+      if (!WholeModuleMode && !(D->getDeclContext() == AssociatedDeclContext))
+          continue;
       if ((isa<ValueDecl>(D) || isa<OperatorDecl>(D) ||
            isa<ExtensionDecl>(D)) &&
           !D->isImplicit()) {
-        if (auto *FD = dyn_cast<FuncDecl>(D))
-          if (FD->isAccessor())
-            continue;
+        if (isa<AccessorDecl>(D))
+          continue;
         D->print(OS, Options);
         OS << "\n\n";
       }
@@ -2644,7 +2683,7 @@ void SILVTable::print(llvm::raw_ostream &OS, bool Verbose) const {
         stripExternalFromLinkage(entry.Implementation->getLinkage())) {
       OS << getLinkageString(entry.Linkage);
     }
-    OS << entry.Implementation->getName();
+    OS << '@' << entry.Implementation->getName();
     switch (entry.TheKind) {
     case SILVTable::Entry::Kind::Normal:
       break;
@@ -2823,8 +2862,8 @@ void SILDefaultWitnessTable::dump() const {
 void SILCoverageMap::print(SILPrintContext &PrintCtx) const {
   llvm::raw_ostream &OS = PrintCtx.OS();
   OS << "sil_coverage_map " << QuotedString(getFile()) << " " << getName()
-     << " " << getHash() << " {\t// " << demangleSymbol(getName())
-     << "\n";
+     << " " << QuotedString(getPGOFuncName()) << " " << getHash() << " {\t// "
+     << demangleSymbol(getName()) << "\n";
   if (PrintCtx.sortSIL())
     std::sort(MappedRegions.begin(), MappedRegions.end(),
               [](const MappedRegion &LHS, const MappedRegion &RHS) {
@@ -2974,6 +3013,9 @@ ID SILPrintContext::getID(const SILBasicBlock *Block) {
 }
 
 ID SILPrintContext::getID(const SILNode *node) {
+  if (node == nullptr)
+    return {ID::Null, ~0U};
+
   if (isa<SILUndef>(node))
     return {ID::SILUndef, 0};
   

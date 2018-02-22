@@ -36,7 +36,6 @@
 #include "swift/Basic/SourceManager.h"
 #include "swift/Parse/Token.h"
 #include "swift/Syntax/SyntaxNodes.h"
-#include "swift/Syntax/SyntaxParsingContext.h"
 #include "clang/Basic/Module.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -347,8 +346,8 @@ void SourceLookupCache::invalidate() {
 //===----------------------------------------------------------------------===//
 
 ModuleDecl::ModuleDecl(Identifier name, ASTContext &ctx)
-  : TypeDecl(DeclKind::Module, &ctx, name, SourceLoc(), { }),
-    DeclContext(DeclContextKind::Module, nullptr),
+  : DeclContext(DeclContextKind::Module, nullptr),
+    TypeDecl(DeclKind::Module, &ctx, name, SourceLoc(), { }),
     Flags({0, 0, 0}) {
   ctx.addDestructorCleanup(*this);
   setImplicit();
@@ -406,31 +405,11 @@ void ModuleDecl::lookupMember(SmallVectorImpl<ValueDecl*> &results,
   size_t oldSize = results.size();
   bool alreadyInPrivateContext = false;
 
-  switch (container->getContextKind()) {
-  case DeclContextKind::SerializedLocal:
-  case DeclContextKind::AbstractClosureExpr:
-  case DeclContextKind::Initializer:
-  case DeclContextKind::TopLevelCodeDecl:
-  case DeclContextKind::AbstractFunctionDecl:
-  case DeclContextKind::SubscriptDecl:
-    llvm_unreachable("This context does not support lookup.");
+  auto containerDecl = container->getAsDeclOrDeclExtensionContext();
+  // If FileUnit, then use FileUnit::lookupValue instead.
+  assert(containerDecl != nullptr && "This context does not support lookup.");
 
-  case DeclContextKind::FileUnit:
-    llvm_unreachable("Use FileUnit::lookupValue instead.");
-
-  case DeclContextKind::ExtensionDecl:
-    llvm_unreachable("Use ExtensionDecl::lookupDirect instead.");
-
-  case DeclContextKind::Module: {
-    assert(container == this);
-    this->lookupValue({}, name, NLKind::QualifiedLookup, results);
-    break;
-  }
-
-  case DeclContextKind::GenericTypeDecl: {
-    auto nominal = dyn_cast<NominalTypeDecl>(container);
-    if (!nominal) break;
-
+  if (auto nominal = dyn_cast<NominalTypeDecl>(containerDecl)) {
     auto lookupResults = nominal->lookupDirect(name);
 
     // Filter out declarations from other modules.
@@ -443,9 +422,12 @@ void ModuleDecl::lookupMember(SmallVectorImpl<ValueDecl*> &results,
     auto AS = nominal->getFormalAccessScope();
     if (AS.isPrivate() || AS.isFileScope())
       alreadyInPrivateContext = true;
-
-    break;
-  }
+  } else if (isa<ModuleDecl>(containerDecl)) {
+    assert(container == this);
+    this->lookupValue({}, name, NLKind::QualifiedLookup, results);
+  } else if (!isa<GenericTypeDecl>(containerDecl)) {
+    // If ExtensionDecl, then use ExtensionDecl::lookupDirect instead.
+    llvm_unreachable("This context does not support lookup.");
   }
 
   // Filter by private-discriminator, or filter out private decls if there isn't
@@ -769,8 +751,10 @@ public:
 };
 
 struct SourceFile::SourceFileSyntaxInfo {
+  const bool Enable;
   /// The root of the syntax tree representing the source file.
   Optional<syntax::SourceFileSyntax> SyntaxRoot;
+  SourceFileSyntaxInfo(bool Enable): Enable(Enable) {}
 };
 
 bool SourceFile::hasSyntaxRoot() const {
@@ -1346,10 +1330,10 @@ static void performAutoImport(
 SourceFile::SourceFile(ModuleDecl &M, SourceFileKind K,
                        Optional<unsigned> bufferID,
                        ImplicitModuleImportKind ModImpKind,
-                       bool KeepSyntaxInfo)
+                       bool KeepParsedTokens, bool BuildSyntaxTree)
   : FileUnit(FileUnitKind::Source, M),
     BufferID(bufferID ? *bufferID : -1),
-    Kind(K), SyntaxInfo(*new SourceFileSyntaxInfo()) {
+    Kind(K), SyntaxInfo(*new SourceFileSyntaxInfo(BuildSyntaxTree)) {
   M.getASTContext().addDestructorCleanup(*this);
   performAutoImport(*this, ModImpKind);
 
@@ -1358,7 +1342,7 @@ SourceFile::SourceFile(ModuleDecl &M, SourceFileKind K,
     assert(!problem && "multiple main files?");
     (void)problem;
   }
-  if (KeepSyntaxInfo) {
+  if (KeepParsedTokens) {
     AllCorrectedTokens = std::vector<Token>();
   }
 }
@@ -1366,20 +1350,31 @@ SourceFile::SourceFile(ModuleDecl &M, SourceFileKind K,
 SourceFile::~SourceFile() { delete &SyntaxInfo; }
 
 std::vector<Token> &SourceFile::getTokenVector() {
-  assert(shouldKeepSyntaxInfo() && "Disabled");
+  assert(shouldCollectToken() && "Disabled");
   return *AllCorrectedTokens;
 }
 
 ArrayRef<Token> SourceFile::getAllTokens() const {
-  assert(shouldKeepSyntaxInfo() && "Disabled");
+  assert(shouldCollectToken() && "Disabled");
   return *AllCorrectedTokens;
 }
 
-bool SourceFile::shouldKeepSyntaxInfo() const {
+bool SourceFile::shouldCollectToken() const {
   switch (Kind) {
   case SourceFileKind::Library:
   case SourceFileKind::Main:
     return (bool)AllCorrectedTokens;
+  case SourceFileKind::REPL:
+  case SourceFileKind::SIL:
+    return false;
+  }
+}
+
+bool SourceFile::shouldBuildSyntaxTree() const {
+  switch (Kind) {
+  case SourceFileKind::Library:
+  case SourceFileKind::Main:
+    return SyntaxInfo.Enable;
   case SourceFileKind::REPL:
   case SourceFileKind::SIL:
     return false;
@@ -1475,6 +1470,11 @@ TypeRefinementContext *SourceFile::getTypeRefinementContext() {
 
 void SourceFile::setTypeRefinementContext(TypeRefinementContext *Root) {
   TRC = Root;
+}
+
+void SourceFile::createReferencedNameTracker() {
+  assert(!ReferencedNames && "This file already has a name tracker.");
+  ReferencedNames.emplace(ReferencedNameTracker());
 }
 
 //===----------------------------------------------------------------------===//

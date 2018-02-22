@@ -318,7 +318,6 @@ SetTestSuite.test("AssociatedTypes") {
     iteratorType: SetIterator<MinimalHashableValue>.self,
     subSequenceType: Slice<Collection>.self,
     indexType: SetIndex<MinimalHashableValue>.self,
-    indexDistanceType: Int.self,
     indicesType: DefaultIndices<Collection>.self)
 }
 
@@ -329,6 +328,13 @@ SetTestSuite.test("sizeof") {
 #else
   expectEqual(8, MemoryLayout.size(ofValue: s))
 #endif
+}
+
+SetTestSuite.test("Index.Hashable") {
+  let s: Set = [1, 2, 3, 4, 5]
+  let t = Set(s.indices)
+  expectEqual(s.count, t.count)
+  expectTrue(t.contains(s.startIndex))
 }
 
 SetTestSuite.test("COW.Smoke") {
@@ -837,7 +843,7 @@ SetTestSuite.test("COW.Fast.UnionInPlaceSmallSetDoesNotReallocate") {
 SetTestSuite.test("COW.Fast.RemoveAllDoesNotReallocate") {
   do {
     var s = getCOWFastSet()
-    let originalCapacity = s._variantBuffer.asNative.capacity
+    let originalCapacity = s.capacity
     expectEqual(3, s.count)
     expectTrue(s.contains(1010))
 
@@ -845,7 +851,7 @@ SetTestSuite.test("COW.Fast.RemoveAllDoesNotReallocate") {
     // We cannot expectTrue that identity changed, since the new buffer of
     // smaller size can be allocated at the same address as the old one.
     var identity1 = s._rawIdentifier()
-    expectTrue(s._variantBuffer.asNative.capacity < originalCapacity)
+    expectTrue(s.capacity < originalCapacity)
     expectEqual(0, s.count)
     expectFalse(s.contains(1010))
 
@@ -858,19 +864,19 @@ SetTestSuite.test("COW.Fast.RemoveAllDoesNotReallocate") {
   do {
     var s = getCOWFastSet()
     var identity1 = s._rawIdentifier()
-    let originalCapacity = s._variantBuffer.asNative.capacity
+    let originalCapacity = s.capacity
     expectEqual(3, s.count)
     expectTrue(s.contains(1010))
 
     s.removeAll(keepingCapacity: true)
     expectEqual(identity1, s._rawIdentifier())
-    expectEqual(originalCapacity, s._variantBuffer.asNative.capacity)
+    expectEqual(originalCapacity, s.capacity)
     expectEqual(0, s.count)
     expectFalse(s.contains(1010))
 
     s.removeAll(keepingCapacity: true)
     expectEqual(identity1, s._rawIdentifier())
-    expectEqual(originalCapacity, s._variantBuffer.asNative.capacity)
+    expectEqual(originalCapacity, s.capacity)
     expectEqual(0, s.count)
     expectFalse(s.contains(1010))
   }
@@ -899,7 +905,7 @@ SetTestSuite.test("COW.Fast.RemoveAllDoesNotReallocate") {
   do {
     var s1 = getCOWFastSet()
     var identity1 = s1._rawIdentifier()
-    let originalCapacity = s1._variantBuffer.asNative.capacity
+    let originalCapacity = s1.capacity
     expectEqual(3, s1.count)
     expectTrue(s1.contains(1010))
 
@@ -910,7 +916,7 @@ SetTestSuite.test("COW.Fast.RemoveAllDoesNotReallocate") {
     expectNotEqual(identity1, identity2)
     expectEqual(3, s1.count)
     expectTrue(s1.contains(1010))
-    expectEqual(originalCapacity, s2._variantBuffer.asNative.capacity)
+    expectEqual(originalCapacity, s2.capacity)
     expectEqual(0, s2.count)
     expectFalse(s2.contains(1010))
 
@@ -923,7 +929,7 @@ SetTestSuite.test("COW.Fast.RemoveAllDoesNotReallocate") {
 SetTestSuite.test("COW.Slow.RemoveAllDoesNotReallocate") {
   do {
     var s = getCOWSlowSet()
-    let originalCapacity = s._variantBuffer.asNative.capacity
+    let originalCapacity = s.capacity
     expectEqual(3, s.count)
     expectTrue(s.contains(TestKeyTy(1010)))
 
@@ -931,7 +937,7 @@ SetTestSuite.test("COW.Slow.RemoveAllDoesNotReallocate") {
     // We cannot expectTrue that identity changed, since the new buffer of
     // smaller size can be allocated at the same address as the old one.
     var identity1 = s._rawIdentifier()
-    expectTrue(s._variantBuffer.asNative.capacity < originalCapacity)
+    expectTrue(s.capacity < originalCapacity)
     expectEqual(0, s.count)
     expectFalse(s.contains(TestKeyTy(1010)))
 
@@ -944,19 +950,19 @@ SetTestSuite.test("COW.Slow.RemoveAllDoesNotReallocate") {
   do {
     var s = getCOWSlowSet()
     var identity1 = s._rawIdentifier()
-    let originalCapacity = s._variantBuffer.asNative.capacity
+    let originalCapacity = s.capacity
     expectEqual(3, s.count)
     expectTrue(s.contains(TestKeyTy(1010)))
 
     s.removeAll(keepingCapacity: true)
     expectEqual(identity1, s._rawIdentifier())
-    expectEqual(originalCapacity, s._variantBuffer.asNative.capacity)
+    expectEqual(originalCapacity, s.capacity)
     expectEqual(0, s.count)
     expectFalse(s.contains(TestKeyTy(1010)))
 
     s.removeAll(keepingCapacity: true)
     expectEqual(identity1, s._rawIdentifier())
-    expectEqual(originalCapacity, s._variantBuffer.asNative.capacity)
+    expectEqual(originalCapacity, s.capacity)
     expectEqual(0, s.count)
     expectFalse(s.contains(TestKeyTy(1010)))
   }
@@ -985,7 +991,7 @@ SetTestSuite.test("COW.Slow.RemoveAllDoesNotReallocate") {
   do {
     var s1 = getCOWSlowSet()
     var identity1 = s1._rawIdentifier()
-    let originalCapacity = s1._variantBuffer.asNative.capacity
+    let originalCapacity = s1.capacity
     expectEqual(3, s1.count)
     expectTrue(s1.contains(TestKeyTy(1010)))
 
@@ -996,7 +1002,7 @@ SetTestSuite.test("COW.Slow.RemoveAllDoesNotReallocate") {
     expectNotEqual(identity1, identity2)
     expectEqual(3, s1.count)
     expectTrue(s1.contains(TestKeyTy(1010)))
-    expectEqual(originalCapacity, s2._variantBuffer.asNative.capacity)
+    expectEqual(originalCapacity, s2.capacity)
     expectEqual(0, s2.count)
     expectFalse(s2.contains(TestKeyTy(1010)))
 
@@ -1412,7 +1418,10 @@ SetTestSuite.test("BridgedFromObjC.Nonverbatim.Insert") {
     s.insert(TestObjCKeyTy(2040) as TestBridgedKeyTy)
 
     var identity2 = s._rawIdentifier()
-    expectNotEqual(identity1, identity2)
+    // Storage identity may or may not change depending on allocation behavior.
+    // (s is eagerly bridged to a regular uniquely referenced native Set.)
+    //expectNotEqual(identity1, identity2)
+
     expectTrue(isNativeSet(s))
     expectEqual(4, s.count)
 
@@ -1566,10 +1575,13 @@ SetTestSuite.test("BridgedFromObjC.Nonverbatim.Contains") {
 
   expectEqual(identity1, s._rawIdentifier())
 
-  // Inserting an item should now create storage unique from the bridged set.
   s.insert(TestBridgedKeyTy(4040))
   var identity2 = s._rawIdentifier()
-  expectNotEqual(identity1, identity2)
+
+  // Storage identity may or may not change depending on allocation behavior.
+  // (s is eagerly bridged to a regular uniquely referenced native Set.)
+  //expectNotEqual(identity1, identity2)
+
   expectTrue(isNativeSet(s))
   expectEqual(4, s.count)
 
@@ -2140,6 +2152,28 @@ SetTestSuite.test("BridgedFromObjC.Nonverbatim.ArrayOfSets") {
   }
 }
 
+SetTestSuite.test("BridgedFromObjC.Nonverbatim.StringEqualityMismatch") {
+  // NSString's isEqual(_:) implementation is stricter than Swift's String, so
+  // Set values bridged over from Objective-C may have duplicate keys.
+  // rdar://problem/35995647
+  let cafe1 = "Cafe\u{301}" as NSString
+  let cafe2 = "Café" as NSString
+
+  let nsset = NSMutableSet()
+  nsset.add(cafe1)
+  expectTrue(nsset.contains(cafe1))
+  expectFalse(nsset.contains(cafe2))
+  nsset.add(cafe2)
+  expectEqual(2, nsset.count)
+  expectTrue(nsset.contains(cafe1))
+  expectTrue(nsset.contains(cafe2))
+  
+  let s: Set<String> = convertNSSetToSet(nsset)
+  expectEqual(1, s.count)
+  expectTrue(s.contains("Cafe\u{301}"))
+  expectTrue(s.contains("Café"))
+  expectTrue(Array(s) == ["Café"])
+}
 
 //===---
 // Dictionary -> NSDictionary bridging tests.
@@ -3147,6 +3181,29 @@ SetTestSuite.test("first") {
 
   expectTrue(s1.contains(s1.first!))
   expectNil(emptySet.first)
+}
+
+SetTestSuite.test("capacity/init(minimumCapacity:)") {
+  let s0 = Set<String>(minimumCapacity: 0)
+  expectGE(s0.capacity, 0)
+
+  let s1 = Set<String>(minimumCapacity: 1)
+  expectGE(s1.capacity, 1)
+
+  let s3 = Set<String>(minimumCapacity: 3)
+  expectGE(s3.capacity, 3)
+
+  let s4 = Set<String>(minimumCapacity: 4)
+  expectGE(s4.capacity, 4)
+
+  let s10 = Set<String>(minimumCapacity: 10)
+  expectGE(s10.capacity, 10)
+
+  let s100 = Set<String>(minimumCapacity: 100)
+  expectGE(s100.capacity, 100)
+
+  let s1024 = Set<String>(minimumCapacity: 1024)
+  expectGE(s1024.capacity, 1024)
 }
 
 SetTestSuite.test("capacity/reserveCapacity(_:)") {

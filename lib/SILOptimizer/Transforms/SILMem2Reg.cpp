@@ -275,7 +275,7 @@ promoteDebugValueAddr(DebugValueAddrInst *DVAI, SILValue Value, SILBuilder &B) {
   assert(Value && "Expected valid value");
   B.setInsertionPoint(DVAI);
   B.setCurrentDebugScope(DVAI->getDebugScope());
-  B.createDebugValue(DVAI->getLoc(), Value, DVAI->getVarInfo());
+  B.createDebugValue(DVAI->getLoc(), Value, *DVAI->getVarInfo());
   DVAI->eraseFromParent();
 }
 
@@ -350,8 +350,10 @@ static void replaceDestroy(DestroyAddrInst *DAI, SILValue NewValue) {
 
   bool expand = shouldExpand(DAI->getModule(),
                              DAI->getOperand()->getType().getObjectType());
-  TL.emitLoweredDestroyValue(Builder, DAI->getLoc(), NewValue,
-                             Lowering::TypeLowering::getLoweringStyle(expand));
+  using TypeExpansionKind = Lowering::TypeLowering::TypeExpansionKind;
+  auto expansionKind = expand ? TypeExpansionKind::MostDerivedDescendents
+                              : TypeExpansionKind::None;
+  TL.emitLoweredDestroyValue(Builder, DAI->getLoc(), NewValue, expansionKind);
   DAI->eraseFromParent();
 }
 

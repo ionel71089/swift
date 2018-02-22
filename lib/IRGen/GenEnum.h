@@ -224,7 +224,7 @@ public:
   }
 
   /// Emit field names for enum reflection.
-  virtual llvm::Constant *emitCaseNames() const;
+  virtual bool isReflectable() const;
 
   /// \brief Return the bits used for discriminators for payload cases.
   ///
@@ -372,7 +372,7 @@ public:
 
   virtual void initializeMetadata(IRGenFunction &IGF,
                                   llvm::Value *metadata,
-                                  llvm::Value *vwtable,
+                                  bool isVWTMutable,
                                   SILType T) const = 0;
 
   virtual bool mayHaveExtraInhabitants(IRGenModule &IGM) const = 0;

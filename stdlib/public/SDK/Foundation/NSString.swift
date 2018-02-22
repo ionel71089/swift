@@ -23,8 +23,8 @@ public class NSSimpleCString {}
 public class NSConstantString {}
 
 // Called by the SwiftObject implementation.
-public func _convertStringToNSString(_ string: String) -> NSString {
-  return string._bridgeToObjectiveC()
+public func _getDescription<T>(_ x: T) -> NSString {
+  return String(reflecting: x)._bridgeToObjectiveC()
 }
 
 extension NSString : ExpressibleByStringLiteral {
@@ -113,6 +113,7 @@ extension NSString {
 }
 
 extension NSString : CustomPlaygroundQuickLookable {
+  @available(*, deprecated, message: "NSString.customPlaygroundQuickLook will be removed in a future Swift version")
   public var customPlaygroundQuickLook: PlaygroundQuickLook {
     return .text(self as String)
   }

@@ -130,6 +130,14 @@
 using namespace swift;
 using namespace irgen;
 
+static llvm::Constant *emitEnumLayoutFlags(IRGenModule &IGM, bool isVWTMutable){
+  // For now, we always use the Swift 5 algorithm.
+  auto flags = EnumLayoutFlags::Swift5Algorithm;
+  if (isVWTMutable) flags |= EnumLayoutFlags::IsVWTMutable;
+
+  return IGM.getSize(Size(uintptr_t(flags)));
+}
+
 SpareBitVector getBitVectorFromAPInt(const APInt &bits, unsigned startBit = 0) {
   if (startBit == 0) {
     return SpareBitVector::fromAPInt(bits);
@@ -150,21 +158,7 @@ void irgen::EnumImplStrategy::initializeFromParams(IRGenFunction &IGF,
   TI->initializeWithTake(IGF, dest, src, T, isOutlined);
 }
 
-llvm::Constant *EnumImplStrategy::emitCaseNames() const {
-  // Build the list of case names, payload followed by no-payload.
-  llvm::SmallString<64> fieldNames;
-  for (auto &payloadCase : getElementsWithPayload()) {
-    fieldNames.append(payloadCase.decl->getName().str());
-    fieldNames.push_back('\0');
-  }
-  for (auto &noPayloadCase : getElementsWithNoPayload()) {
-    fieldNames.append(noPayloadCase.decl->getName().str());
-    fieldNames.push_back('\0');
-  }
-  // The final null terminator is provided by getAddrOfGlobalString.
-  return IGM.getAddrOfGlobalString(fieldNames,
-                                   /*willBeRelativelyAddressed*/ true);
-}
+bool EnumImplStrategy::isReflectable() const { return true; }
 
 unsigned EnumImplStrategy::getPayloadSizeForMetadata() const {
   llvm_unreachable("don't need payload size for this enum kind");
@@ -587,78 +581,21 @@ namespace {
 
     void initializeMetadata(IRGenFunction &IGF,
                             llvm::Value *metadata,
-                            llvm::Value *vwtable,
+                            bool isVWTMutable,
                             SILType T) const override {
       // Fixed-size enums don't need dynamic witness table initialization.
       if (TIK >= Fixed) return;
 
-      assert(!ElementsWithPayload.empty() &&
+      assert(ElementsWithPayload.size() == 1 &&
              "empty singleton enum should not be dynamic!");
 
-      // Get the value witness table for the element.
-      SILType eltTy = T.getEnumElementType(ElementsWithPayload[0].decl,
-                                           IGM.getSILModule());
-      llvm::Value *eltLayout = IGF.emitTypeLayoutRef(eltTy);
-
-      Address vwtAddr(vwtable, IGF.IGM.getPointerAlignment());
-      Address eltLayoutAddr(eltLayout, IGF.IGM.getPointerAlignment());
-
-      auto getWitnessDestAndSrc = [&](ValueWitness witness,
-                                      Address *dest,
-                                      Address *src) {
-        *dest = IGF.Builder.CreateConstArrayGEP(vwtAddr,
-                                   unsigned(witness), IGF.IGM.getPointerSize());
-        *src = IGF.Builder.CreateConstArrayGEP(eltLayoutAddr,
-          unsigned(witness) - unsigned(ValueWitness::First_TypeLayoutWitness),
-          IGF.IGM.getPointerSize());
-      };
-
-      auto copyWitnessFromElt = [&](ValueWitness witness) {
-        Address dest, src;
-        getWitnessDestAndSrc(witness, &dest, &src);
-        auto val = IGF.Builder.CreateLoad(src);
-        IGF.Builder.CreateStore(val, dest);
-      };
-
-      copyWitnessFromElt(ValueWitness::Size);
-      copyWitnessFromElt(ValueWitness::Stride);
-
-      // Copy flags over, adding HasEnumWitnesses flag
-      auto copyFlagsFromElt = [&](ValueWitness witness) -> llvm::Value* {
-        Address dest, src;
-        getWitnessDestAndSrc(witness, &dest, &src);
-        auto val = IGF.Builder.CreateLoad(src);
-        auto ewFlag = IGF.Builder.CreatePtrToInt(val, IGF.IGM.SizeTy);
-        auto ewMask
-          = IGF.IGM.getSize(Size(ValueWitnessFlags::HasEnumWitnesses));
-        ewFlag = IGF.Builder.CreateOr(ewFlag, ewMask);
-        auto flag = IGF.Builder.CreateIntToPtr(ewFlag,
-                                              dest.getType()->getElementType());
-        IGF.Builder.CreateStore(flag, dest);
-        return val;
-      };
-
-      auto flags = copyFlagsFromElt(ValueWitness::Flags);
-
-      // If the original type had extra inhabitants, carry over its
-      // extra inhabitant flags.
-      auto xiBB = llvm::BasicBlock::Create(IGF.IGM.getLLVMContext());
-      auto noXIBB = llvm::BasicBlock::Create(IGF.IGM.getLLVMContext());
-
-      auto xiFlag = IGF.Builder.CreatePtrToInt(flags, IGF.IGM.SizeTy);
-      auto xiMask
-        = IGF.IGM.getSize(Size(ValueWitnessFlags::Enum_HasExtraInhabitants));
-      xiFlag = IGF.Builder.CreateAnd(xiFlag, xiMask);
-      auto xiBool = IGF.Builder.CreateICmpNE(xiFlag,
-                                             IGF.IGM.getSize(Size(0)));
-      IGF.Builder.CreateCondBr(xiBool, xiBB, noXIBB);
-
-      IGF.Builder.emitBlock(xiBB);
-      ConditionalDominanceScope condition(IGF);
-      copyWitnessFromElt(ValueWitness::ExtraInhabitantFlags);
-      IGF.Builder.CreateBr(noXIBB);
-
-      IGF.Builder.emitBlock(noXIBB);
+      auto payloadTy = T.getEnumElementType(ElementsWithPayload[0].decl,
+                                            IGM.getSILModule());
+      auto payloadLayout = IGF.emitTypeLayoutRef(payloadTy);
+      auto flags = emitEnumLayoutFlags(IGF.IGM, isVWTMutable);
+      IGF.Builder.CreateCall(
+                    IGF.IGM.getInitEnumMetadataSingleCaseFn(),
+                    {metadata, flags, payloadLayout});
     }
 
     bool mayHaveExtraInhabitants(IRGenModule &IGM) const override {
@@ -904,7 +841,7 @@ namespace {
 
     void initializeMetadata(IRGenFunction &IGF,
                             llvm::Value *metadata,
-                            llvm::Value *vwtable,
+                            bool isVWTMutable,
                             SILType T) const override {
       // No-payload enums are always fixed-size so never need dynamic value
       // witness table initialization.
@@ -945,7 +882,7 @@ namespace {
         llvm::MapVector<CanType, llvm::Value *> &typeToMetadataVec,
         SILType T) const override {
       auto canType = T.getSwiftRValueType();
-      assert(!canType->hasArchetype() &&
+      assert(!canType->is<ArchetypeType>() &&
              "collectArchetypeMetadata: no archetype expected here");
     }
 
@@ -1158,11 +1095,11 @@ namespace {
       llvm_unreachable("no extra inhabitants");
     }
 
-    llvm::Constant *emitCaseNames() const override {
+    bool isReflectable() const override {
       // C enums have arbitrary values and we don't preserve the mapping
-      // between the case and raw value at runtime, so don't emit any
-      // case names at all so that reflection can give up in this case.
-      return nullptr;
+      // between the case and raw value at runtime, so don't mark it as
+      // reflectable.
+      return false;
     }
   };
   
@@ -2846,7 +2783,7 @@ namespace {
 
     void initializeMetadata(IRGenFunction &IGF,
                             llvm::Value *metadata,
-                            llvm::Value *vwtable,
+                            bool isVWTMutable,
                             SILType T) const override {
       // Fixed-size enums don't need dynamic witness table initialization.
       if (TIK >= Fixed) return;
@@ -2858,10 +2795,10 @@ namespace {
       auto payloadLayout = IGF.emitTypeLayoutRef(payloadTy);
       auto emptyCasesVal = llvm::ConstantInt::get(IGF.IGM.Int32Ty,
                                                   ElementsWithNoPayload.size());
-
+      auto flags = emitEnumLayoutFlags(IGF.IGM, isVWTMutable);
       IGF.Builder.CreateCall(
-                    IGF.IGM.getInitEnumValueWitnessTableSinglePayloadFn(),
-                    {vwtable, payloadLayout, emptyCasesVal});
+                    IGF.IGM.getInitEnumMetadataSinglePayloadFn(),
+                    {metadata, flags, payloadLayout, emptyCasesVal});
     }
 
     /// \group Extra inhabitants
@@ -3952,6 +3889,12 @@ namespace {
       } else if (CommonSpareBits.size() > 0) {
         // Otherwise the payload is just the index.
         payload = EnumPayload::zero(IGM, PayloadSchema);
+#if defined(__BIG_ENDIAN__) && defined(__LP64__)
+        // Code produced above are of type IGM.Int32Ty
+        // However, payload is IGM.SizeTy in 64bit
+        if (numCaseBits >= 64)
+          tagIndex = IGF.Builder.CreateZExt(tagIndex, IGM.SizeTy);
+#endif
         // We know we won't use more than numCaseBits from tagIndex's value:
         // We made sure of this in the logic above.
         payload.insertValue(IGF, tagIndex, 0,
@@ -4442,7 +4385,7 @@ namespace {
         payloadTI.collectArchetypeMetadata(IGF, typeToMetadataVec, PayloadT);
       }
       if (typeToMetadataVec.find(canType) == typeToMetadataVec.end() &&
-          typeToMetadataVec.size() != SZ) {
+          ((typeToMetadataVec.size() != SZ) || (TIK < Fixed))) {
         auto *metadata = IGF.emitTypeMetadataRefForLayout(T);
         assert(metadata && "Expected Type Metadata Ref");
         typeToMetadataVec.insert(std::make_pair(canType, metadata));
@@ -4744,7 +4687,7 @@ namespace {
 
     void initializeMetadata(IRGenFunction &IGF,
                             llvm::Value *metadata,
-                            llvm::Value *vwtable,
+                            bool isVWTMutable,
                             SILType T) const override {
       // Fixed-size enums don't need dynamic metadata initialization.
       if (TIK >= Fixed) return;
@@ -4754,8 +4697,9 @@ namespace {
       auto numPayloadsVal = llvm::ConstantInt::get(IGF.IGM.SizeTy,
                                                    ElementsWithPayload.size());
 
+      auto flags = emitEnumLayoutFlags(IGF.IGM, isVWTMutable);
       IGF.Builder.CreateCall(IGF.IGM.getInitEnumMetadataMultiPayloadFn(),
-                             {vwtable, metadata, numPayloadsVal,
+                             {metadata, flags, numPayloadsVal,
                               payloadLayoutArray});
     }
 
@@ -5139,7 +5083,7 @@ namespace {
 
     void initializeMetadata(IRGenFunction &IGF,
                             llvm::Value *metadata,
-                            llvm::Value *vwtable,
+                            bool isVWTMutable,
                             SILType T) const override {
       llvm_unreachable("resilient enums cannot be defined");
     }
@@ -5392,9 +5336,9 @@ namespace {
     }
     void initializeMetadata(IRGenFunction &IGF,
                             llvm::Value *metadata,
-                            llvm::Value *vwtable,
+                            bool isVWTMutable,
                             SILType T) const override {
-      return Strategy.initializeMetadata(IGF, metadata, vwtable, T);
+      return Strategy.initializeMetadata(IGF, metadata, isVWTMutable, T);
     }
     bool mayHaveExtraInhabitants(IRGenModule &IGM) const override {
       return Strategy.mayHaveExtraInhabitants(IGM);
@@ -5899,7 +5843,8 @@ MultiPayloadEnumImplStrategy::completeFixedLayout(TypeConverter &TC,
   unsigned numTagBits = llvm::Log2_32(numTags-1) + 1;
   ExtraTagBitCount = numTagBits <= commonSpareBitCount
     ? 0 : numTagBits - commonSpareBitCount;
-  NumExtraTagValues = numTags >> commonSpareBitCount;
+  NumExtraTagValues =
+      (commonSpareBitCount < 32) ? numTags >> commonSpareBitCount : 0;
 
   // Create the type. We need enough bits to store the largest payload plus
   // extra tag bits we need.

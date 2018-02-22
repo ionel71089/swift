@@ -29,6 +29,7 @@
 #include "clang/AST/DeclObjC.h"
 #include "clang/Analysis/DomainSpecific/CocoaConventions.h"
 #include "clang/Basic/CharInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -203,6 +204,29 @@ CanSILFunctionType Lowering::adjustFunctionType(
                               type->getOptionalErrorResult(),
                               type->getASTContext(),
                               witnessMethodConformance);
+}
+
+CanSILFunctionType
+SILFunctionType::getWithRepresentation(Representation repr) {
+  return getWithExtInfo(getExtInfo().withRepresentation(repr));
+}
+
+CanSILFunctionType SILFunctionType::getWithExtInfo(ExtInfo newExt) {
+  auto oldExt = getExtInfo();
+  if (newExt == oldExt)
+    return CanSILFunctionType(this);
+
+  auto calleeConvention =
+    (newExt.hasContext()
+       ? (oldExt.hasContext()
+            ? getCalleeConvention()
+            : Lowering::DefaultThickCalleeConvention)
+       : ParameterConvention::Direct_Unowned);
+
+  return get(getGenericSignature(), newExt, getCoroutineKind(),
+             calleeConvention, getParameters(), getYields(),
+             getResults(), getOptionalErrorResult(), getASTContext(),
+             getWitnessMethodConformanceOrNone());
 }
 
 namespace {
@@ -424,7 +448,7 @@ private:
     if (clangTy->isPointerType()
         && clangTy->getPointeeType().isConstQualified()) {
       // Peek through optionals.
-      if (auto substObjTy = substTy.getAnyOptionalObjectType())
+      if (auto substObjTy = substTy.getOptionalObjectType())
         substTy = substObjTy;
 
       // Void pointers aren't usefully indirectable.
@@ -756,11 +780,11 @@ static std::pair<AbstractionPattern, CanType> updateResultTypeForForeignError(
 
   // These conventions wrap the result type in a level of optionality.
   case ForeignErrorConvention::NilResult:
-    assert(!substFormalResultType->getAnyOptionalObjectType());
+    assert(!substFormalResultType->getOptionalObjectType());
     substFormalResultType =
         OptionalType::get(substFormalResultType)->getCanonicalType();
     origResultType =
-        AbstractionPattern::getOptional(origResultType, OTK_Optional);
+        AbstractionPattern::getOptional(origResultType);
     return {origResultType, substFormalResultType};
 
   // These conventions don't require changes to the formal error type.
@@ -1243,7 +1267,6 @@ static CanSILFunctionType getNativeSILFunctionType(
       LLVM_FALLTHROUGH;
     case SILDeclRef::Kind::Destroyer:
     case SILDeclRef::Kind::GlobalAccessor:
-    case SILDeclRef::Kind::GlobalGetter:
     case SILDeclRef::Kind::DefaultArgGenerator:
     case SILDeclRef::Kind::StoredPropertyInitializer:
     case SILDeclRef::Kind::IVarInitializer:
@@ -1729,14 +1752,16 @@ static SelectorFamily getSelectorFamily(SILDeclRef c) {
       return SelectorFamily::None;
       
     auto *FD = cast<FuncDecl>(c.getDecl());
-    switch (FD->getAccessorKind()) {
-    case AccessorKind::NotAccessor:
+    auto accessor = dyn_cast<AccessorDecl>(FD);
+    if (!accessor)
       return getSelectorFamily(FD->getName());
+
+    switch (accessor->getAccessorKind()) {
     case AccessorKind::IsGetter:
       // Getter selectors can belong to families if their name begins with the
       // wrong thing.
-      if (FD->getAccessorStorageDecl()->isObjC() || c.isForeign) {
-        auto declName = FD->getAccessorStorageDecl()->getBaseName();
+      if (accessor->getStorage()->isObjC() || c.isForeign) {
+        auto declName = accessor->getStorage()->getBaseName();
         switch (declName.getKind()) {
         case DeclBaseName::Kind::Normal:
           return getSelectorFamily(declName.getIdentifier());
@@ -1770,7 +1795,6 @@ static SelectorFamily getSelectorFamily(SILDeclRef c) {
   case SILDeclRef::Kind::Destroyer:
   case SILDeclRef::Kind::Deallocator:
   case SILDeclRef::Kind::GlobalAccessor:
-  case SILDeclRef::Kind::GlobalGetter:
   case SILDeclRef::Kind::IVarDestroyer:
   case SILDeclRef::Kind::DefaultArgGenerator:
   case SILDeclRef::Kind::StoredPropertyInitializer:
@@ -1864,8 +1888,8 @@ getSILFunctionTypeForSelectorFamily(SILModule &M, SelectorFamily family,
 static bool isImporterGeneratedAccessor(const clang::Decl *clangDecl,
                                         SILDeclRef constant) {
   // Must be an accessor.
-  auto func = dyn_cast<FuncDecl>(constant.getDecl());
-  if (!func || !func->isAccessor())
+  auto accessor = dyn_cast<AccessorDecl>(constant.getDecl());
+  if (!accessor)
     return false;
 
   // Must be a type member.
@@ -1927,7 +1951,7 @@ getUncachedSILFunctionTypeForConstant(SILModule &M,
         assert(origLoweredInterfaceType->getNumParams() == 2);
 
         // The 'self' parameter is still the second argument.
-        unsigned selfIndex = cast<FuncDecl>(decl)->isSetter() ? 1 : 0;
+        unsigned selfIndex = cast<AccessorDecl>(decl)->isSetter() ? 1 : 0;
         assert(selfIndex == 1 ||
                origLoweredInterfaceType.getParams()[0].getType()->isVoid());
         foreignInfo.Self.setSelfIndex(selfIndex);
@@ -2005,7 +2029,6 @@ TypeConverter::getDeclRefRepresentation(SILDeclRef c) {
 
   switch (c.kind) {
     case SILDeclRef::Kind::GlobalAccessor:
-    case SILDeclRef::Kind::GlobalGetter:
     case SILDeclRef::Kind::DefaultArgGenerator:
     case SILDeclRef::Kind::StoredPropertyInitializer:
       return SILFunctionTypeRepresentation::Thin;
@@ -2028,10 +2051,17 @@ TypeConverter::getDeclRefRepresentation(SILDeclRef c) {
   llvm_unreachable("Unhandled SILDeclRefKind in switch.");
 }
 
+// Provide the ability to turn off the type converter cache to ease debugging.
+static llvm::cl::opt<bool>
+    DisableConstantInfoCache("sil-disable-typelowering-constantinfo-cache",
+                             llvm::cl::init(false));
+
 const SILConstantInfo &TypeConverter::getConstantInfo(SILDeclRef constant) {
-  auto found = ConstantTypes.find(constant);
-  if (found != ConstantTypes.end())
-    return *found->second;
+  if (!DisableConstantInfoCache) {
+    auto found = ConstantTypes.find(constant);
+    if (found != ConstantTypes.end())
+      return *found->second;
+  }
 
   // First, get a function type for the constant.  This creates the
   // right type for a getter or setter.
@@ -2071,6 +2101,9 @@ const SILConstantInfo &TypeConverter::getConstantInfo(SILDeclRef constant) {
                                                   loweredInterfaceType,
                                                   silFnType,
                                                   genericEnv};
+  if (DisableConstantInfoCache)
+    return *result;
+
   auto inserted = ConstantTypes.insert({constant, result});
   assert(inserted.second);
   return *result;
@@ -2104,20 +2137,7 @@ SILParameterInfo TypeConverter::getConstantSelfParameter(SILDeclRef constant) {
 // @guaranteed or whatever.
 static bool checkASTTypeForABIDifferences(CanType type1,
                                           CanType type2) {
-  return !type1->matches(type2, TypeMatchFlags::AllowABICompatible,
-                         /*resolver*/nullptr);
-}
-
-SILDeclRef TypeConverter::getOverriddenVTableEntry(SILDeclRef method) {
-  SILDeclRef cur = method, next = method;
-  do {
-    cur = next;
-    if (cur.requiresNewVTableEntry())
-      return cur;
-    next = cur.getNextOverriddenVTableEntry();
-  } while (next);
-
-  return cur;
+  return !type1->matches(type2, TypeMatchFlags::AllowABICompatible);
 }
 
 // FIXME: This makes me very upset. Can we do without this?
@@ -2126,11 +2146,11 @@ static CanType copyOptionalityFromDerivedToBase(TypeConverter &tc,
                                                 CanType base) {
   // Unwrap optionals, but remember that we did.
   bool derivedWasOptional = false;
-  if (auto object = derived.getAnyOptionalObjectType()) {
+  if (auto object = derived.getOptionalObjectType()) {
     derivedWasOptional = true;
     derived = object;
   }
-  if (auto object = base.getAnyOptionalObjectType()) {
+  if (auto object = base.getOptionalObjectType()) {
     base = object;
   }
 
@@ -2385,7 +2405,7 @@ public:
   /// Optionals need to have their object types substituted by these rules.
   CanType visitBoundGenericEnumType(CanBoundGenericEnumType origType) {
     // Only use a special rule if it's Optional.
-    if (!origType->getDecl()->classifyAsOptionalType()) {
+    if (!origType->getDecl()->isOptionalDecl()) {
       return visitType(origType);
     }
 
@@ -2528,7 +2548,6 @@ static AbstractFunctionDecl *getBridgedFunction(SILDeclRef declRef) {
   case SILDeclRef::Kind::Destroyer:
   case SILDeclRef::Kind::Deallocator:
   case SILDeclRef::Kind::GlobalAccessor:
-  case SILDeclRef::Kind::GlobalGetter:
   case SILDeclRef::Kind::DefaultArgGenerator:
   case SILDeclRef::Kind::StoredPropertyInitializer:
   case SILDeclRef::Kind::IVarInitializer:
@@ -2702,4 +2721,211 @@ TypeConverter::getLoweredFormalTypes(SILDeclRef constant,
   auto uncurried = buildFinalFunctionType(uncurriedInputType, resultType);
 
   return { bridgingFnPattern, uncurried };
+}
+
+// TODO: We should compare generic signatures. Class and witness methods
+// allow variance in "self"-fulfilled parameters; other functions must
+// match exactly.
+// TODO: More sophisticated param and return ABI compatibility rules could
+// diverge.
+static bool areABICompatibleParamsOrReturns(SILType a, SILType b) {
+  // Address parameters are all ABI-compatible, though the referenced
+  // values may not be. Assume whoever's doing this knows what they're
+  // doing.
+  if (a.isAddress() && b.isAddress())
+    return true;
+
+  // Addresses aren't compatible with values.
+  // TODO: An exception for pointerish types?
+  if (a.isAddress() || b.isAddress())
+    return false;
+
+  // Tuples are ABI compatible if their elements are.
+  // TODO: Should destructure recursively.
+  SmallVector<CanType, 1> aElements, bElements;
+  if (auto tup = a.getAs<TupleType>()) {
+    auto types = tup.getElementTypes();
+    aElements.append(types.begin(), types.end());
+  } else {
+    aElements.push_back(a.getSwiftRValueType());
+  }
+  if (auto tup = b.getAs<TupleType>()) {
+    auto types = tup.getElementTypes();
+    bElements.append(types.begin(), types.end());
+  } else {
+    bElements.push_back(b.getSwiftRValueType());
+  }
+
+  if (aElements.size() != bElements.size())
+    return false;
+
+  for (unsigned i : indices(aElements)) {
+    auto aa = SILType::getPrimitiveObjectType(aElements[i]);
+    auto bb = SILType::getPrimitiveObjectType(bElements[i]);
+    // Equivalent types are always ABI-compatible.
+    if (aa == bb)
+      continue;
+
+    // FIXME: If one or both types are dependent, we can't accurately assess
+    // whether they're ABI-compatible without a generic context. We can
+    // do a better job here when dependent types are related to their
+    // generic signatures.
+    if (aa.hasTypeParameter() || bb.hasTypeParameter())
+      continue;
+
+    // Bridgeable object types are interchangeable.
+    if (aa.isBridgeableObjectType() && bb.isBridgeableObjectType())
+      continue;
+
+    // Optional and IUO are interchangeable if their elements are.
+    auto aObject = aa.getOptionalObjectType();
+    auto bObject = bb.getOptionalObjectType();
+    if (aObject && bObject && areABICompatibleParamsOrReturns(aObject, bObject))
+      continue;
+    // Optional objects are ABI-interchangeable with non-optionals;
+    // None is represented by a null pointer.
+    if (aObject && aObject.isBridgeableObjectType() &&
+        bb.isBridgeableObjectType())
+      continue;
+    if (bObject && bObject.isBridgeableObjectType() &&
+        aa.isBridgeableObjectType())
+      continue;
+
+    // Optional thick metatypes are ABI-interchangeable with non-optionals
+    // too.
+    if (aObject)
+      if (auto aObjMeta = aObject.getAs<MetatypeType>())
+        if (auto bMeta = bb.getAs<MetatypeType>())
+          if (aObjMeta->getRepresentation() == bMeta->getRepresentation() &&
+              bMeta->getRepresentation() != MetatypeRepresentation::Thin)
+            continue;
+    if (bObject)
+      if (auto aMeta = aa.getAs<MetatypeType>())
+        if (auto bObjMeta = bObject.getAs<MetatypeType>())
+          if (aMeta->getRepresentation() == bObjMeta->getRepresentation() &&
+              aMeta->getRepresentation() != MetatypeRepresentation::Thin)
+            continue;
+
+    // Function types are interchangeable if they're also ABI-compatible.
+    if (auto aFunc = aa.getAs<SILFunctionType>()) {
+      if (auto bFunc = bb.getAs<SILFunctionType>()) {
+        // *NOTE* We swallow the specific error here for now. We will still get
+        // that the function types are incompatible though, just not more
+        // specific information.
+        return aFunc->isABICompatibleWith(bFunc).isCompatible();
+      }
+    }
+
+    // Metatypes are interchangeable with metatypes with the same
+    // representation.
+    if (auto aMeta = aa.getAs<MetatypeType>()) {
+      if (auto bMeta = bb.getAs<MetatypeType>()) {
+        if (aMeta->getRepresentation() == bMeta->getRepresentation())
+          continue;
+      }
+    }
+    // Other types must match exactly.
+    return false;
+  }
+
+  return true;
+}
+
+namespace {
+using ABICompatibilityCheckResult =
+    SILFunctionType::ABICompatibilityCheckResult;
+} // end anonymous namespace
+
+ABICompatibilityCheckResult
+SILFunctionType::isABICompatibleWith(CanSILFunctionType other) const {
+  // The calling convention and function representation can't be changed.
+  if (getRepresentation() != other->getRepresentation())
+    return ABICompatibilityCheckResult::DifferentFunctionRepresentations;
+
+  // Check the results.
+  if (getNumResults() != other->getNumResults())
+    return ABICompatibilityCheckResult::DifferentNumberOfResults;
+
+  for (unsigned i : indices(getResults())) {
+    auto result1 = getResults()[i];
+    auto result2 = other->getResults()[i];
+
+    if (result1.getConvention() != result2.getConvention())
+      return ABICompatibilityCheckResult::DifferentReturnValueConventions;
+
+    if (!areABICompatibleParamsOrReturns(result1.getSILStorageType(),
+                                         result2.getSILStorageType())) {
+      return ABICompatibilityCheckResult::ABIIncompatibleReturnValues;
+    }
+  }
+
+  // Our error result conventions are designed to be ABI compatible
+  // with functions lacking error results.  Just make sure that the
+  // actual conventions match up.
+  if (hasErrorResult() && other->hasErrorResult()) {
+    auto error1 = getErrorResult();
+    auto error2 = other->getErrorResult();
+    if (error1.getConvention() != error2.getConvention())
+      return ABICompatibilityCheckResult::DifferentErrorResultConventions;
+
+    if (!areABICompatibleParamsOrReturns(error1.getSILStorageType(),
+                                         error2.getSILStorageType()))
+      return ABICompatibilityCheckResult::ABIIncompatibleErrorResults;
+  }
+
+  // Check the parameters.
+  // TODO: Could allow known-empty types to be inserted or removed, but SIL
+  // doesn't know what empty types are yet.
+  if (getParameters().size() != other->getParameters().size())
+    return ABICompatibilityCheckResult::DifferentNumberOfParameters;
+
+  for (unsigned i : indices(getParameters())) {
+    auto param1 = getParameters()[i];
+    auto param2 = other->getParameters()[i];
+
+    if (param1.getConvention() != param2.getConvention())
+      return {ABICompatibilityCheckResult::DifferingParameterConvention, i};
+    if (!areABICompatibleParamsOrReturns(param1.getSILStorageType(),
+                                         param2.getSILStorageType()))
+      return {ABICompatibilityCheckResult::ABIIncompatibleParameterType, i};
+  }
+
+  // This needs to be checked last because the result implies everying else has
+  // already been checked and this is the only difference.
+  if (isNoEscape() != other->isNoEscape() &&
+      (getRepresentation() == SILFunctionType::Representation::Thick))
+    return ABICompatibilityCheckResult::ABIEscapeToNoEscapeConversion;
+
+  return ABICompatibilityCheckResult::None;
+}
+
+StringRef SILFunctionType::ABICompatibilityCheckResult::getMessage() const {
+  switch (kind) {
+  case innerty::None:
+    return "None";
+  case innerty::DifferentFunctionRepresentations:
+    return "Different function representations";
+  case innerty::DifferentNumberOfResults:
+    return "Different number of results";
+  case innerty::DifferentReturnValueConventions:
+    return "Different return value conventions";
+  case innerty::ABIIncompatibleReturnValues:
+    return "ABI incompatible return values";
+  case innerty::DifferentErrorResultConventions:
+    return "Different error result conventions";
+  case innerty::ABIIncompatibleErrorResults:
+    return "ABI incompatible error results";
+  case innerty::DifferentNumberOfParameters:
+    return "Different number of parameters";
+
+  // These two have to do with specific parameters, so keep the error message
+  // non-plural.
+  case innerty::DifferingParameterConvention:
+    return "Differing parameter convention";
+  case innerty::ABIIncompatibleParameterType:
+    return "ABI incompatible parameter type.";
+  case innerty::ABIEscapeToNoEscapeConversion:
+    return "Escape to no escape conversion";
+  }
+  llvm_unreachable("Covered switch isn't completely covered?!");
 }

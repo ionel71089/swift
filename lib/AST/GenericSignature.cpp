@@ -42,7 +42,7 @@ void ConformanceAccessPath::dump() const {
   llvm::errs() << "\n";
 }
 
-GenericSignature::GenericSignature(ArrayRef<GenericTypeParamType *> params,
+GenericSignature::GenericSignature(TypeArrayView<GenericTypeParamType> params,
                                    ArrayRef<Requirement> requirements,
                                    bool isKnownCanonical)
   : NumGenericParams(params.size()), NumRequirements(requirements.size()),
@@ -77,10 +77,11 @@ GenericSignature::GenericSignature(ArrayRef<GenericTypeParamType *> params,
 #endif
 
   if (isKnownCanonical)
-    CanonicalSignatureOrASTContext = &getASTContext(params, requirements);
+    CanonicalSignatureOrASTContext = &getASTContext(getGenericParams(),
+                                                    requirements);
 }
 
-ArrayRef<GenericTypeParamType *> 
+TypeArrayView<GenericTypeParamType>
 GenericSignature::getInnermostGenericParams() const {
   auto params = getGenericParams();
 
@@ -111,8 +112,8 @@ GenericSignature::getSubstitutableParams() const {
 }
 
 ASTContext &GenericSignature::getASTContext(
-                                ArrayRef<swift::GenericTypeParamType *> params,
-                                ArrayRef<swift::Requirement> requirements) {
+                                    TypeArrayView<GenericTypeParamType> params,
+                                    ArrayRef<swift::Requirement> requirements) {
   // The params and requirements cannot both be empty.
   if (!params.empty())
     return params.front()->getASTContext();
@@ -148,9 +149,10 @@ static unsigned getRequirementKindOrder(RequirementKind kind) {
 }
 #endif
 
-CanGenericSignature GenericSignature::getCanonical(
-                                        ArrayRef<GenericTypeParamType *> params,
-                                        ArrayRef<Requirement> requirements) {
+CanGenericSignature
+GenericSignature::getCanonical(TypeArrayView<GenericTypeParamType> params,
+                               ArrayRef<Requirement> requirements,
+                               bool skipValidation) {
   // Canonicalize the parameters and requirements.
   SmallVector<GenericTypeParamType*, 8> canonicalParams;
   canonicalParams.reserve(params.size());
@@ -172,10 +174,14 @@ CanGenericSignature GenericSignature::getCanonical(
                       reqt.getLayoutConstraint()));
   }
 
+  (void)skipValidation;
   auto canSig = get(canonicalParams, canonicalRequirements,
                     /*isKnownCanonical=*/true);
 
 #ifndef NDEBUG
+  if (skipValidation)
+    return CanGenericSignature(canSig);
+
   PrettyStackTraceGenericSignature debugStack("canonicalizing", canSig);
 
   // Check that the signature is canonical.
@@ -336,7 +342,7 @@ bool GenericSignature::enumeratePairedRequirements(
   unsigned curReqIdx = 0, numReqs = reqs.size();
 
   // ... and walking through the list of generic parameters.
-  ArrayRef<GenericTypeParamType *> genericParams = getGenericParams();
+  auto genericParams = getGenericParams();
   unsigned curGenericParamIdx = 0, numGenericParams = genericParams.size();
 
   // Figure out which generic parameters are complete.
@@ -900,14 +906,85 @@ namespace {
   using GSBConstraint = GenericSignatureBuilder::Constraint<T>;
 } // end anonymous namespace
 
+/// Determine whether there is a conformance of the given
+/// subject type to the given protocol within the given set of explicit
+/// requirements.
+static bool hasConformanceInSignature(ArrayRef<Requirement> requirements,
+                                      Type subjectType,
+                                      ProtocolDecl *proto) {
+  // Make sure this requirement exists in the requirement signature.
+  for (const auto &req: requirements) {
+    if (req.getKind() == RequirementKind::Conformance &&
+        req.getFirstType()->isEqual(subjectType) &&
+        req.getSecondType()->castTo<ProtocolType>()->getDecl()
+          == proto) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/// Check whether the given requirement source has any non-canonical protocol
+/// requirements in it.
+static bool hasNonCanonicalSelfProtocolRequirement(
+                                          const RequirementSource *source,
+                                          ProtocolDecl *conformingProto) {
+  for (; source; source = source->parent) {
+    // Only look at protocol requirements.
+    if (!source->isProtocolRequirement())
+      continue;
+
+    // If we don't already have a requirement signature for this protocol,
+    // build one now.
+    auto inProto = source->getProtocolDecl();
+    if (!inProto->isRequirementSignatureComputed()) {
+      inProto->computeRequirementSignature();
+      assert(inProto->isRequirementSignatureComputed() &&
+             "couldn't compute requirement signature?");
+    }
+
+    // Check whether the given requirement is in the requirement signature.
+    if (!source->usesRequirementSignature &&
+        !hasConformanceInSignature(inProto->getRequirementSignature(),
+                                   source->getStoredType(), conformingProto))
+      return true;
+
+    // Update the conforming protocol for the rest of the search.
+    conformingProto = inProto;
+  }
+
+  return false;
+}
+
 /// Retrieve the best requirement source from the list
 static const RequirementSource *
 getBestRequirementSource(ArrayRef<GSBConstraint<ProtocolDecl *>> constraints) {
   const RequirementSource *bestSource = nullptr;
+  bool bestIsNonCanonical = false;
+
+  auto isBetter = [&](const RequirementSource *source, bool isNonCanonical) {
+    if (!bestSource) return true;
+
+    if (bestIsNonCanonical != isNonCanonical)
+      return bestIsNonCanonical;
+
+    return bestSource->compare(source) > 0;
+  };
+
   for (const auto &constraint : constraints) {
     auto source = constraint.source;
-    if (!bestSource || source->compare(bestSource) < 0)
+
+    // If there is a non-canonical protocol requirement next to the root,
+    // skip this requirement source.
+    bool isNonCanonical =
+      hasNonCanonicalSelfProtocolRequirement(source, constraint.value);
+
+    if (isBetter(source, isNonCanonical)) {
       bestSource = source;
+      bestIsNonCanonical = isNonCanonical;
+      continue;
+    }
   }
 
   return bestSource;
@@ -934,27 +1011,6 @@ ConformanceAccessPath GenericSignature::getConformanceAccessPath(
   typedef GenericSignatureBuilder::RequirementSource RequirementSource;
   ConformanceAccessPath path;
 
-#ifndef NDEBUG
-  // Local function to determine whether there is a conformance of the given
-  // subject type to the given protocol within the given set of explicit
-  // requirements.
-  auto hasConformanceInSignature = [&](ArrayRef<Requirement> requirements,
-                                       Type subjectType,
-                                       ProtocolDecl *proto) -> bool {
-    // Make sure this requirement exists in the requirement signature.
-    for (const auto& req: requirements) {
-      if (req.getKind() == RequirementKind::Conformance &&
-          req.getFirstType()->isEqual(subjectType) &&
-          req.getSecondType()->castTo<ProtocolType>()->getDecl()
-            == proto) {
-        return true;
-      }
-    }
-
-    return false;
-  };
-#endif
-
   // Local function to construct the conformance access path from the
   // requirement.
   std::function<void(ArrayRef<Requirement>, const RequirementSource *,
@@ -964,13 +1020,32 @@ ConformanceAccessPath GenericSignature::getConformanceAccessPath(
                   ProtocolDecl *requirementSignatureProto) {
     // Each protocol requirement is a step along the path.
     if (source->isProtocolRequirement()) {
-      // If we're expanding for a protocol that has no requirement signature
-      // (yet) and have hit the penultimate step, this is the last step
+      // If we're expanding for a protocol that had no requirement signature
+      // and have hit the penultimate step, this is the last step
       // that would occur in the requirement signature.
+      Optional<GenericSignatureBuilder> replacementBuilder;
       if (!source->parent->parent && requirementSignatureProto) {
-        Type subjectType = source->getStoredType()->getCanonicalType();
-        path.path.push_back({subjectType, conformingProto});
-        return;
+        // If we have a requirement signature now, we're done.
+        if (source->usesRequirementSignature) {
+          Type subjectType = source->getStoredType()->getCanonicalType();
+          path.path.push_back({subjectType, conformingProto});
+          return;
+        }
+
+        // The generic signature builder we're using for this protocol
+        // wasn't built from its own requirement signature, so we can't
+        // trust it. Make sure we have a requirement signature, then build
+        // a new generic signature builder.
+        // FIXME: It would be better if we could replace the canonical generic
+        // signature builder with the rebuilt one.
+        if (!requirementSignatureProto->isRequirementSignatureComputed())
+          requirementSignatureProto->computeRequirementSignature();
+        assert(requirementSignatureProto->isRequirementSignatureComputed());
+
+        replacementBuilder.emplace(getASTContext());
+        replacementBuilder->addGenericSignature(
+                            requirementSignatureProto->getGenericSignature());
+        replacementBuilder->processDelayedRequirements();
       }
 
       // Follow the rest of the path to derive the conformance into which
@@ -1003,16 +1078,12 @@ ConformanceAccessPath GenericSignature::getConformanceAccessPath(
         return;
       }
 
-      // Canonicalize this step with respect to the requirement signature.
-      if (!inProtocol->isRequirementSignatureComputed()) {
-        inProtocol->computeRequirementSignature();
-        assert(inProtocol->isRequirementSignatureComputed() &&
-               "missing signature");
-      }
-
+      // Get the generic signature builder for the protocol.
       // Get a generic signature for the protocol's signature.
       auto inProtoSig = inProtocol->getGenericSignature();
-      auto &inProtoSigBuilder = *inProtoSig->getGenericSignatureBuilder();
+      auto &inProtoSigBuilder =
+          replacementBuilder ? *replacementBuilder
+                             : *inProtoSig->getGenericSignatureBuilder();
 
       // Retrieve the stored type, but erase all of the specific associated
       // type declarations; we don't want any details of the enclosing context
@@ -1049,6 +1120,7 @@ ConformanceAccessPath GenericSignature::getConformanceAccessPath(
     if (source->kind == RequirementSource::Superclass ||
         source->kind == RequirementSource::Concrete) {
       auto conformance = source->getProtocolConformance();
+      (void)conformance;
       assert(conformance.getRequirement() == conformingProto);
       path.path.push_back({source->getAffectedType(), conformingProto});
       return;
@@ -1090,7 +1162,7 @@ ConformanceAccessPath GenericSignature::getConformanceAccessPath(
 }
 
 unsigned GenericParamKey::findIndexIn(
-                  llvm::ArrayRef<GenericTypeParamType *> genericParams) const {
+                      TypeArrayView<GenericTypeParamType> genericParams) const {
   // For depth 0, we have random access. We perform the extra checking so that
   // we can return
   if (Depth == 0 && Index < genericParams.size() &&
@@ -1108,3 +1180,9 @@ unsigned GenericParamKey::findIndexIn(
   // We didn't find the parameter we were looking for.
   return genericParams.size();
 }
+
+unsigned GenericSignature::getGenericParamOrdinal(GenericTypeParamType *param) {
+  return GenericParamKey(param->getDepth(), param->getIndex())
+    .findIndexIn(getGenericParams());
+}
+

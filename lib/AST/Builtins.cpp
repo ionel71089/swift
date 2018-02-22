@@ -178,7 +178,6 @@ getBuiltinFunction(Identifier Id, ArrayRef<Type> argTypes, Type ResType,
                              /*FuncLoc=*/SourceLoc(),
                              Name, /*NameLoc=*/SourceLoc(),
                              /*Throws=*/false, /*ThrowsLoc=*/SourceLoc(),
-                             /*AccessorKeywordLoc=*/SourceLoc(),
                              /*GenericParams=*/nullptr,
                              paramList,
                              TypeLoc::withoutLoc(ResType), DC);
@@ -244,7 +243,6 @@ getBuiltinGenericFunction(Identifier Id,
                                /*FuncLoc=*/SourceLoc(),
                                Name, /*NameLoc=*/SourceLoc(),
                                /*Throws=*/false, /*ThrowsLoc=*/SourceLoc(),
-                               /*AccessorKeywordLoc=*/SourceLoc(),
                                GenericParams, paramList,
                                TypeLoc::withoutLoc(ResBodyType), DC);
     
@@ -265,6 +263,10 @@ static ValueDecl *getGepRawOperation(Identifier Id, Type ArgType) {
   Type ArgElts[] = { Context.TheRawPointerType, ArgType };
   Type ResultTy = Context.TheRawPointerType;
   return getBuiltinFunction(Id, ArgElts, ResultTy);
+}
+
+static ValueDecl *getStringObjectOrOperation(Identifier Id, Type ArgType) {
+  return getBuiltinFunction(Id, {ArgType, ArgType}, ArgType);
 }
 
 /// Build a binary operation declaration.
@@ -866,10 +868,29 @@ static ValueDecl *getCastFromBridgeObjectOperation(ASTContext &C,
     Type WordTy = BuiltinIntegerType::get(BuiltinIntegerWidth::pointer(), C);
     return getBuiltinFunction(Id, { BridgeTy }, WordTy);
   }
-      
+
   default:
     llvm_unreachable("not a cast from bridge object op");
   }
+}
+
+/// ClassifyBridgeObject has type:
+///      (Builtin.BridgeObject) -> (Builtin.Int1, Builtin.Int1).
+static ValueDecl *getClassifyBridgeObject(ASTContext &C, Identifier Id) {
+  Type int1Ty = BuiltinIntegerType::get(1, C);
+  Type resultTy = TupleType::get({
+    TupleTypeElt(int1Ty, C.getIdentifier("isObjCObject")),
+    TupleTypeElt(int1Ty, C.getIdentifier("isObjCTaggedPointer"))
+  }, C);
+
+  return getBuiltinFunction(Id, { C.TheBridgeObjectType }, resultTy);
+}
+
+static ValueDecl *getValueToBridgeObject(ASTContext &C, Identifier Id) {
+  BuiltinGenericSignatureBuilder builder(C);
+  builder.addParameter(makeGenericParam(0));
+  builder.setResult(makeConcrete(C.TheBridgeObjectType));
+  return builder.build(Id);
 }
 
 static ValueDecl *getUnsafeGuaranteed(ASTContext &C, Identifier Id) {
@@ -1103,11 +1124,11 @@ static ValueDecl *getUnreachableOperation(ASTContext &Context,
 static ValueDecl *getOnceOperation(ASTContext &Context,
                                    Identifier Id,
                                    bool withContext) {
-  // (RawPointer, @convention(thin) ([Context]) -> ()[, Context]) -> ()
+  // (RawPointer, @convention(c) ([Context]) -> ()[, Context]) -> ()
   
   auto HandleTy = Context.TheRawPointerType;
   auto VoidTy = Context.TheEmptyTupleType;
-  auto Thin = FunctionType::ExtInfo(FunctionTypeRepresentation::Thin,
+  auto Thin = FunctionType::ExtInfo(FunctionTypeRepresentation::CFunctionPointer,
                                     /*throws*/ false);
   if (withContext) {
     auto ContextTy = Context.TheRawPointerType;
@@ -1583,11 +1604,11 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
     return getAllocWithTailElemsOperation(Context, Id, NumTailTypes);
   }
 
-  BuiltinValueKind BV = llvm::StringSwitch<BuiltinValueKind>(OperationName)
+  auto BV = BuiltinValueKind::None;
 #define BUILTIN(id, name, Attrs) \
-       .Case(name, BuiltinValueKind::id)
+  if (name == OperationName) { BV = BuiltinValueKind::id; } else
 #include "swift/AST/Builtins.def"
-       .Default(BuiltinValueKind::None);
+  /* final "else" */ {}
 
   // Filter out inappropriate overloads.
   OverloadedBuiltinKind OBK = OverloadedBuiltinKinds[unsigned(BV)];
@@ -1610,6 +1631,11 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
   case BuiltinValueKind::GepRaw:
     if (Types.size() != 1) return nullptr;
     return getGepRawOperation(Id, Types[0]);
+
+  case BuiltinValueKind::StringObjectOr:
+    if (Types.size() != 1)
+      return nullptr;
+    return getStringObjectOrOperation(Id, Types[0]);
 
   case BuiltinValueKind::Gep:
     if (Types.size() != 1) return nullptr;
@@ -1732,7 +1758,7 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
   case BuiltinValueKind::BridgeFromRawPointer:
     if (!Types.empty()) return nullptr;
     return getNativeObjectCast(Context, Id, BV);
-      
+
   case BuiltinValueKind::CastToBridgeObject:
     if (!Types.empty()) return nullptr;
     return getCastToBridgeObjectOperation(Context, Id);
@@ -1807,6 +1833,13 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
     if (Types.size() != 1) return nullptr;
     return getCheckedConversionOperation(Context, Id, Types[0]);
 
+  case BuiltinValueKind::ClassifyBridgeObject:
+    if (!Types.empty()) return nullptr;
+    return getClassifyBridgeObject(Context, Id);
+  case BuiltinValueKind::ValueToBridgeObject:
+    if (!Types.empty())
+      return nullptr;
+    return getValueToBridgeObject(Context, Id);
   case BuiltinValueKind::UnsafeGuaranteed:
     return getUnsafeGuaranteed(Context, Id);
 

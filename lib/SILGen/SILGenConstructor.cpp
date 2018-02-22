@@ -200,9 +200,25 @@ void SILGenFunction::emitValueConstructor(ConstructorDecl *ctor) {
   assert(!selfTy.getClassOrBoundGenericClass()
          && "can't emit a class ctor here");
 
+  // Decide if we need to do extra work to warn on unsafe behavior in pre-Swift-5
+  // modes.
+  MarkUninitializedInst::Kind MUIKind;
+  if (isDelegating) {
+    MUIKind = MarkUninitializedInst::DelegatingSelf;
+  } else if (getASTContext().isSwiftVersionAtLeast(5)) {
+    MUIKind = MarkUninitializedInst::RootSelf;
+  } else {
+    auto *dc = ctor->getParent();
+    if (isa<ExtensionDecl>(dc) &&
+        dc->getAsStructOrStructExtensionContext()->getParentModule() !=
+          dc->getParentModule()) {
+      MUIKind = MarkUninitializedInst::CrossModuleRootSelf;
+    } else {
+      MUIKind = MarkUninitializedInst::RootSelf;
+    }
+  }
+
   // Allocate the local variable for 'self'.
-  auto MUIKind = isDelegating ? MarkUninitializedInst::DelegatingSelf
-                              : MarkUninitializedInst::RootSelf;
   emitLocalVariableWithCleanup(selfDecl, MUIKind)->finishInitialization(*this);
   SILValue selfLV = VarLocs[selfDecl].value;
 
@@ -412,7 +428,7 @@ void SILGenFunction::emitEnumConstructor(EnumElementDecl *element) {
     B.createReturn(ReturnLoc, emitEmptyTuple(Loc));
   } else {
     assert(enumTI.isLoadable() || !silConv.useLoweredAddresses());
-    SILValue result = mv.forward(*this);
+    SILValue result = mv.ensurePlusOne(*this, ReturnLoc).forward(*this);
     scope.pop();
     B.createReturn(ReturnLoc, result);
   }
@@ -513,6 +529,8 @@ void SILGenFunction::emitClassConstructorAllocator(ConstructorDecl *ctor) {
   SILValue initedSelfValue = emitApplyWithRethrow(Loc, initVal.forward(*this),
                                                   initTy, subs, args);
 
+  emitProfilerIncrement(ctor->getBody());
+
   // Return the initialized 'self'.
   B.createReturn(ImplicitReturnLocation::getImplicitReturnLoc(Loc),
                  initedSelfValue);
@@ -570,8 +588,9 @@ void SILGenFunction::emitClassConstructorInitializer(ConstructorDecl *ctor) {
 
   // Emit the prolog for the non-self arguments.
   // FIXME: Handle self along with the other body patterns.
-  emitProlog(ctor->getParameterList(1),
-             TupleType::getEmpty(F.getASTContext()), ctor, ctor->hasThrows());
+  uint16_t ArgNo = emitProlog(ctor->getParameterList(1),
+                              TupleType::getEmpty(F.getASTContext()), ctor,
+                              ctor->hasThrows());
 
   SILType selfTy = getLoweredLoadableType(selfDecl->getType());
   ManagedValue selfArg = B.createFunctionArgument(selfTy, selfDecl);
@@ -579,7 +598,8 @@ void SILGenFunction::emitClassConstructorInitializer(ConstructorDecl *ctor) {
   if (!NeedsBoxForSelf) {
     SILLocation PrologueLoc(selfDecl);
     PrologueLoc.markAsPrologue();
-    B.createDebugValue(PrologueLoc, selfArg.getValue());
+    SILDebugVariable DbgVar(selfDecl->isLet(), ++ArgNo);
+    B.createDebugValue(PrologueLoc, selfArg.getValue(), DbgVar);
   }
 
   if (!ctor->hasStubImplementation()) {
@@ -664,6 +684,22 @@ void SILGenFunction::emitClassConstructorInitializer(ConstructorDecl *ctor) {
   // Emit the constructor body.
   emitStmt(ctor->getBody());
 
+  // Emit the call to super.init() right before exiting from the initializer.
+  if (NeedsBoxForSelf) {
+    if (auto *SI = ctor->getSuperInitCall()) {
+      B.setInsertionPoint(ReturnDest.getBlock());
+
+      emitRValue(SI);
+
+      B.emitBlock(B.splitBlockForFallthrough(), ctor);
+
+      ReturnDest = JumpDest(B.getInsertionBB(),
+                            ReturnDest.getDepth(),
+                            ReturnDest.getCleanupLocation());
+      B.clearInsertionPoint();
+    }
+  }
+
   CleanupStateRestorationScope SelfCleanupSave(Cleanups);
 
   // Build a custom epilog block, since the AST representation of the
@@ -677,16 +713,11 @@ void SILGenFunction::emitClassConstructorInitializer(ConstructorDecl *ctor) {
            "emitting epilog in wrong scope");
 
     SILGenSavedInsertionPoint savedIP(*this, ReturnDest.getBlock());
-    assert(B.getInsertionBB()->empty() && "Epilog already set up?");
     auto cleanupLoc = CleanupLocation(ctor);
 
     // If we're using a box for self, reload the value at the end of the init
     // method.
     if (NeedsBoxForSelf) {
-      // Emit the call to super.init() right before exiting from the initializer.
-      if (Expr *SI = ctor->getSuperInitCall())
-        emitRValue(SI);
-
       ManagedValue storedSelf =
           ManagedValue::forUnmanaged(VarLocs[selfDecl].value);
       selfArg = B.createLoadCopy(cleanupLoc, storedSelf);
@@ -1006,7 +1037,9 @@ void SILGenFunction::emitIVarInitializer(SILDeclRef ivarInitializer) {
   SILValue selfArg = F.begin()->createFunctionArgument(selfTy, selfDecl);
   SILLocation PrologueLoc(selfDecl);
   PrologueLoc.markAsPrologue();
-  B.createDebugValue(PrologueLoc, selfArg);
+  // Hard-code self as argument number 1.
+  SILDebugVariable DbgVar(selfDecl->isLet(), 1);
+  B.createDebugValue(PrologueLoc, selfArg, DbgVar);
   selfArg = B.createMarkUninitialized(selfDecl, selfArg,
                                       MarkUninitializedInst::RootSelf);
   assert(selfTy.hasReferenceSemantics() && "can't emit a value type ctor here");

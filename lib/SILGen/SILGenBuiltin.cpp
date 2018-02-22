@@ -389,16 +389,8 @@ static ManagedValue emitCastFromReferenceType(SILGenFunction &SGF,
     SILValue result = SILUndef::get(destType, SGF.SGM.M);
     return ManagedValue::forUnmanaged(result);
   }
-  
-  // Save the cleanup on the argument so we can forward it onto the cast
-  // result.
-  auto cleanup = args[0].getCleanup();
 
-  // Take the reference type argument and cast it.
-  SILValue result = SGF.B.createUncheckedRefCast(loc, args[0].getValue(),
-                                                 destType);
-  // Return the cast result with the original cleanup.
-  return ManagedValue(result, cleanup);
+  return SGF.B.createUncheckedRefCast(loc, args[0], destType);
 }
 
 /// Specialized emitter for Builtin.castFromNativeObject.
@@ -677,11 +669,8 @@ static ManagedValue emitBuiltinCastToBridgeObject(SILGenFunction &SGF,
     SILValue undef = SILUndef::get(objPointerType, SGF.SGM.M);
     return ManagedValue::forUnmanaged(undef);
   }
-  
-  // Save the cleanup on the argument so we can forward it onto the cast
-  // result.
-  auto refCleanup = args[0].getCleanup();
-  SILValue ref = args[0].getValue();
+
+  ManagedValue ref = args[0];
   SILValue bits = args[1].getUnmanagedValue();
   
   // If the argument is existential, open it.
@@ -691,9 +680,8 @@ static ManagedValue emitBuiltinCastToBridgeObject(SILGenFunction &SGF,
     SILType loweredOpenedTy = SGF.getLoweredLoadableType(openedTy);
     ref = SGF.B.createOpenExistentialRef(loc, ref, loweredOpenedTy);
   }
-  
-  SILValue result = SGF.B.createRefToBridgeObject(loc, ref, bits);
-  return ManagedValue(result, refCleanup);
+
+  return SGF.B.createRefToBridgeObject(loc, ref, bits);
 }
 
 /// Specialized emitter for Builtin.castReferenceFromBridgeObject.
@@ -735,6 +723,32 @@ static ManagedValue emitBuiltinCastBitPatternFromBridgeObject(
   SILValue result = SGF.B.createBridgeObjectToWord(loc, args[0].getValue(),
                                                    wordType);
   return ManagedValue::forUnmanaged(result);
+}
+
+static ManagedValue emitBuiltinClassifyBridgeObject(SILGenFunction &SGF,
+                                                    SILLocation loc,
+                                                    SubstitutionList subs,
+                                                    ArrayRef<ManagedValue> args,
+                                                    SGFContext C) {
+  assert(args.size() == 1 && "classify should have one argument");
+  assert(subs.empty() && "classify should not have subs");
+
+  SILValue result = SGF.B.createClassifyBridgeObject(loc, args[0].getValue());
+  return ManagedValue::forUnmanaged(result);
+}
+
+static ManagedValue emitBuiltinValueToBridgeObject(SILGenFunction &SGF,
+                                                   SILLocation loc,
+                                                   SubstitutionList subs,
+                                                   ArrayRef<ManagedValue> args,
+                                                   SGFContext C) {
+  assert(args.size() == 1 && "ValueToBridgeObject should have one argument");
+  assert(subs.size() == 1 && "ValueToBridgeObject should have one sub");
+  auto &fromTL = SGF.getTypeLowering(subs[0].getReplacement());
+  assert(fromTL.isTrivial() && "Expected a trivial type");
+
+  SILValue result = SGF.B.createValueToBridgeObject(loc, args[0].getValue());
+  return SGF.emitManagedRetain(loc, result);
 }
 
 // This should only accept as an operand type single-refcounted-pointer types,

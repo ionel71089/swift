@@ -250,8 +250,7 @@ SILFunction *CapturePropagation::specializeConstClosure(PartialApplyInst *PAI,
   // expressed as literals. So its callee signature will be the same as its
   // return signature.
   auto NewFTy = getPartialApplyInterfaceResultType(PAI);
-  NewFTy = Lowering::adjustFunctionType(NewFTy,
-                                        SILFunctionType::Representation::Thin);
+  NewFTy = NewFTy->getWithRepresentation(SILFunctionType::Representation::Thin);
 
   GenericEnvironment *GenericEnv = nullptr;
   if (NewFTy->getGenericSignature())
@@ -262,7 +261,7 @@ SILFunction *CapturePropagation::specializeConstClosure(PartialApplyInst *PAI,
       OrigF->getEntryCount(), OrigF->isThunk(), OrigF->getClassSubclassScope(),
       OrigF->getInlineStrategy(), OrigF->getEffectsKind(),
       /*InsertBefore*/ OrigF, OrigF->getDebugScope());
-  if (OrigF->hasUnqualifiedOwnership()) {
+  if (!OrigF->hasQualifiedOwnership()) {
     NewF->setUnqualifiedOwnership();
   }
   DEBUG(llvm::dbgs() << "  Specialize callee as ";
@@ -397,6 +396,10 @@ static SILFunction *getSpecializedWithDeadParams(
     if (I.mayHaveSideEffects() || isa<TermInst>(&I))
       return nullptr;
   }
+
+  auto Rep = Specialized->getLoweredFunctionType()->getRepresentation();
+  if (getSILFunctionLanguage(Rep) != SILFunctionLanguage::Swift)
+    return nullptr;
 
   GenericSpecialized = std::make_pair(nullptr, nullptr);
 

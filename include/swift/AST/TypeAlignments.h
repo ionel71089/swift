@@ -37,6 +37,7 @@ namespace swift {
   class ExtensionDecl;
   class GenericEnvironment;
   class GenericTypeParamDecl;
+  class NominalTypeDecl;
   class NormalProtocolConformance;
   class OperatorDecl;
   class Pattern;
@@ -52,7 +53,7 @@ namespace swift {
 
   /// We frequently use three tag bits on all of these types.
   constexpr size_t DeclAlignInBits = 3;
-  constexpr size_t DeclContextAlignInBits = 4;
+  constexpr size_t DeclContextAlignInBits = 3;
   constexpr size_t ExprAlignInBits = 3;
   constexpr size_t StmtAlignInBits = 3;
   constexpr size_t TypeAlignInBits = 3;
@@ -90,6 +91,7 @@ LLVM_DECLARE_TYPE_ALIGNMENT(swift::OperatorDecl, swift::DeclAlignInBits)
 LLVM_DECLARE_TYPE_ALIGNMENT(swift::ProtocolDecl, swift::DeclAlignInBits)
 LLVM_DECLARE_TYPE_ALIGNMENT(swift::TypeDecl, swift::DeclAlignInBits)
 LLVM_DECLARE_TYPE_ALIGNMENT(swift::ValueDecl, swift::DeclAlignInBits)
+LLVM_DECLARE_TYPE_ALIGNMENT(swift::NominalTypeDecl, swift::DeclAlignInBits)
 LLVM_DECLARE_TYPE_ALIGNMENT(swift::ExtensionDecl, swift::DeclAlignInBits)
 
 LLVM_DECLARE_TYPE_ALIGNMENT(swift::TypeBase, swift::TypeAlignInBits)

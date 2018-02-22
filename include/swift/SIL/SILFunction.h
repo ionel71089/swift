@@ -23,6 +23,7 @@
 #include "swift/SIL/SILDebugScope.h"
 #include "swift/SIL/SILLinkage.h"
 #include "swift/SIL/SILPrintContext.h"
+#include "swift/SIL/SILProfiler.h"
 #include "llvm/ADT/StringMap.h"
 
 /// The symbol name used for the program entry point function.
@@ -132,6 +133,10 @@ private:
   /// The source location and scope of the function.
   const SILDebugScope *DebugScope;
 
+  /// The profiler for instrumentation based profiling, or null if profiling is
+  /// disabled.
+  SILProfiler *Profiler = nullptr;
+
   /// The function's bare attribute. Bare means that the function is SIL-only
   /// and does not require debug info.
   unsigned Bare : 1;
@@ -166,10 +171,8 @@ private:
   /// would indicate.
   unsigned HasCReferences : 1;
 
-  /// Set if the function should be preserved and changed to public linkage
-  /// during dead function elimination. This is used for some generic
-  /// pre-specialization.
-  unsigned KeepAsPublic : 1;
+  /// Whether cross-module references to this function should use weak linking.
+  unsigned IsWeakLinked : 1;
 
   /// If != OptimizationMode::NotSet, the optimization mode specified with an
   /// function attribute.
@@ -215,6 +218,11 @@ private:
   /// after the pass runs, we only see a semantic-arc world.
   bool HasQualifiedOwnership = true;
 
+  /// Set if the function body was deserialized from canonical SIL. This implies
+  /// that the function's home module performed SIL diagnostics prior to
+  /// serialization.
+  bool WasDeserializedCanonical = false;
+
   SILFunction(SILModule &module, SILLinkage linkage, StringRef mangledName,
               CanSILFunctionType loweredType, GenericEnvironment *genericEnv,
               Optional<SILLocation> loc, IsBare_t isBareSILFunction,
@@ -251,7 +259,23 @@ public:
     return SILFunctionConventions(LoweredType, getModule());
   }
 
+  SILProfiler *getProfiler() const { return Profiler; }
+
+  void setProfiler(SILProfiler *InheritedProfiler) {
+    assert(!Profiler && "Function already has a profiler");
+    Profiler = InheritedProfiler;
+  }
+
+  void createProfiler(ASTNode Root) {
+    assert(!Profiler && "Function already has a profiler");
+    Profiler = SILProfiler::create(Module, Root);
+  }
+
+  void discardProfiler() { Profiler = nullptr; }
+
   ProfileCounter getEntryCount() const { return EntryCount; }
+
+  void setEntryCount(ProfileCounter Count) { EntryCount = Count; }
 
   bool isNoReturnFunction() const;
 
@@ -265,10 +289,6 @@ public:
   /// You have to do that yourself
   void rewriteLoweredTypeUnsafe(CanSILFunctionType newType) {
     LoweredType = newType;
-  }
-
-  bool canBeDeleted() const {
-    return !getRefCount() && !isZombie() && !isKeepAsPublic();
   }
 
   /// Return the number of entities referring to this function (other
@@ -318,15 +338,18 @@ public:
   /// Returns true if this function has qualified ownership instructions in it.
   bool hasQualifiedOwnership() const { return HasQualifiedOwnership; }
 
-  /// Returns true if this function has unqualified ownership instructions in
-  /// it.
-  bool hasUnqualifiedOwnership() const { return !HasQualifiedOwnership; }
-
   /// Sets the HasQualifiedOwnership flag to false. This signals to SIL that no
   /// ownership instructions should be in this function any more.
   void setUnqualifiedOwnership() {
     HasQualifiedOwnership = false;
   }
+
+  /// Returns true if this function was deserialized from canonical
+  /// SIL. (.swiftmodule files contain canonical SIL; .sib files may be 'raw'
+  /// SIL). If so, diagnostics should not be reapplied.
+  bool wasDeserializedCanonical() const { return WasDeserializedCanonical; }
+
+  void setWasDeserializedCanonical() { WasDeserializedCanonical = true; }
 
   /// Returns the calling convention used by this entry point.
   SILFunctionTypeRepresentation getRepresentation() const {
@@ -429,6 +452,16 @@ public:
   /// Return whether this function may be referenced by C code.
   bool hasCReferences() const { return HasCReferences; }
   void setHasCReferences(bool value) { HasCReferences = value; }
+
+  /// Returns whether this function's symbol must always be weakly referenced
+  /// across module boundaries.
+  bool isWeakLinked() const { return IsWeakLinked; }
+  /// Forces IRGen to treat references to this function as weak across module
+  /// boundaries (i.e. if it has external linkage).
+  void setWeakLinked(bool value = true) {
+    assert(!IsWeakLinked && "already set");
+    IsWeakLinked = value;
+  }
 
   /// Get the DeclContext of this function. (Debug info only).
   DeclContext *getDeclContext() const {
@@ -578,9 +611,6 @@ public:
   /// called within the addressor.
   bool isGlobalInit() const { return GlobalInitFlag; }
   void setGlobalInit(bool isGI) { GlobalInitFlag = isGI; }
-
-  bool isKeepAsPublic() const { return KeepAsPublic; }
-  void setKeepAsPublic(bool keep) { KeepAsPublic = keep; }
 
   /// Return whether this function has a foreign implementation which can
   /// be emitted on demand.

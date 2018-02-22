@@ -15,6 +15,9 @@ typealias Int256 = DoubleWidth<Int128>
 typealias Int512 = DoubleWidth<Int256>
 typealias Int1024 = DoubleWidth<Int512>
 
+func checkSignedIntegerConformance<T: SignedInteger>(_ x: T) {}
+func checkUnsignedIntegerConformance<T: UnsignedInteger>(_ x: T) {}
+
 dwTests.test("Literals") {
   let w: DoubleWidth<UInt8> = 100
   expectTrue(w == 100 as Int)
@@ -158,6 +161,21 @@ dwTests.test("inits") {
   _ = DWU16(UInt32.max)
 }
 
+dwTests.test("Magnitude") {
+  typealias DWU16 = DoubleWidth<UInt8>
+  typealias DWI16 = DoubleWidth<Int8>
+
+  expectTrue(DWU16.min.magnitude == UInt16.min.magnitude)
+  expectTrue((42 as DWU16).magnitude == (42 as UInt16).magnitude)
+  expectTrue(DWU16.max.magnitude == UInt16.max.magnitude)
+
+  expectTrue(DWI16.min.magnitude == Int16.min.magnitude)
+  expectTrue((-42 as DWI16).magnitude == (-42 as Int16).magnitude)
+  expectTrue(DWI16().magnitude == Int16(0).magnitude) // See SR-6602.
+  expectTrue((42 as DWI16).magnitude == (42 as Int16).magnitude)
+  expectTrue(DWI16.max.magnitude == Int16.max.magnitude)
+}
+
 dwTests.test("TwoWords") {
   typealias DW = DoubleWidth<Int>
 
@@ -205,6 +223,14 @@ dwTests.test("Remainder/DividingBy0") {
   }
   expectCrashLater()
   _ = f(42, 0)
+}
+
+dwTests.test("RemainderReportingOverflow/DividingByMinusOne") {
+  func f(_ x: Int256, _ y: Int256) -> Int256 {
+    return x.remainderReportingOverflow(dividingBy: y).partialValue
+  }
+  expectEqual(f(.max, -1), 0)
+  expectEqual(f(.min, -1), 0)
 }
 
 dwTests.test("Division/By0") {
@@ -339,6 +365,14 @@ dwTests.test("Words") {
     repeatElement(UInt.max, count: 1024 / UInt.bitWidth))
   expectEqualSequence((1 as Int1024).words,
     [1] + Array(repeating: 0, count: 1024 / UInt.bitWidth - 1))
+}
+
+dwTests.test("Conditional Conformance") {
+  checkSignedIntegerConformance(0 as Int128)
+  checkSignedIntegerConformance(0 as Int1024)
+
+  checkUnsignedIntegerConformance(0 as UInt128)
+  checkUnsignedIntegerConformance(0 as UInt1024)
 }
 
 runAllTests()

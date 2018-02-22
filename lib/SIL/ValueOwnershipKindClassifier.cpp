@@ -42,7 +42,6 @@ CONSTANT_OWNERSHIP_INST(Owned, LoadWeak)
 CONSTANT_OWNERSHIP_INST(Owned, KeyPath)
 CONSTANT_OWNERSHIP_INST(Owned, PartialApply)
 CONSTANT_OWNERSHIP_INST(Owned, StrongPin)
-CONSTANT_OWNERSHIP_INST(Owned, ThinToThickFunction)
 CONSTANT_OWNERSHIP_INST(Owned, InitExistentialValue)
 CONSTANT_OWNERSHIP_INST(Owned, GlobalValue) // TODO: is this correct?
 
@@ -62,6 +61,7 @@ CONSTANT_OWNERSHIP_INST(Trivial, AllocStack)
 CONSTANT_OWNERSHIP_INST(Trivial, BeginAccess)
 CONSTANT_OWNERSHIP_INST(Trivial, BridgeObjectToWord)
 CONSTANT_OWNERSHIP_INST(Trivial, ClassMethod)
+CONSTANT_OWNERSHIP_INST(Trivial, ClassifyBridgeObject)
 CONSTANT_OWNERSHIP_INST(Trivial, ObjCMethod)
 CONSTANT_OWNERSHIP_INST(Trivial, ExistentialMetatype)
 CONSTANT_OWNERSHIP_INST(Trivial, FloatLiteral)
@@ -107,6 +107,7 @@ CONSTANT_OWNERSHIP_INST(Trivial, UncheckedTrivialBitCast)
 CONSTANT_OWNERSHIP_INST(Trivial, ValueMetatype)
 CONSTANT_OWNERSHIP_INST(Trivial, WitnessMethod)
 CONSTANT_OWNERSHIP_INST(Trivial, StoreBorrow)
+CONSTANT_OWNERSHIP_INST(Trivial, ConvertEscapeToNoEscape)
 CONSTANT_OWNERSHIP_INST(Unowned, InitBlockStorageHeader)
 // TODO: It would be great to get rid of these.
 CONSTANT_OWNERSHIP_INST(Unowned, RawPointerToRef)
@@ -114,6 +115,7 @@ CONSTANT_OWNERSHIP_INST(Unowned, RefToUnowned)
 CONSTANT_OWNERSHIP_INST(Unowned, UnmanagedToRef)
 CONSTANT_OWNERSHIP_INST(Unowned, UnownedToRef)
 CONSTANT_OWNERSHIP_INST(Unowned, ObjCProtocol)
+CONSTANT_OWNERSHIP_INST(Unowned, ValueToBridgeObject)
 #undef CONSTANT_OWNERSHIP_INST
 
 #define CONSTANT_OR_TRIVIAL_OWNERSHIP_INST(OWNERSHIP, INST)                    \
@@ -146,6 +148,10 @@ CONSTANT_OR_TRIVIAL_OWNERSHIP_INST(Owned, UnconditionalCheckedCastValue)
 // be compatible so that TBAA doesn't allow the destroy to be hoisted above uses
 // of the cast, or the programmer must use Builtin.fixLifetime.
 CONSTANT_OR_TRIVIAL_OWNERSHIP_INST(Unowned, UncheckedBitwiseCast)
+
+// A thin_to_thick instruction can return a trivial (@noescape) type.
+CONSTANT_OR_TRIVIAL_OWNERSHIP_INST(Owned, ThinToThickFunction)
+
 #undef CONSTANT_OR_TRIVIAL_OWNERSHIP_INST
 
 // For a forwarding instruction, we loop over all operands and make sure that
@@ -446,6 +452,7 @@ CONSTANT_OWNERSHIP_BUILTIN(Unowned, CastFromNativeObject)
 CONSTANT_OWNERSHIP_BUILTIN(Unowned, CastToBridgeObject)
 CONSTANT_OWNERSHIP_BUILTIN(Unowned, CastReferenceFromBridgeObject)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, CastBitPatternFromBridgeObject)
+CONSTANT_OWNERSHIP_BUILTIN(Trivial, ClassifyBridgeObject)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, BridgeToRawPointer)
 CONSTANT_OWNERSHIP_BUILTIN(Unowned, BridgeFromRawPointer)
 CONSTANT_OWNERSHIP_BUILTIN(Unowned, CastReference)
@@ -464,6 +471,7 @@ CONSTANT_OWNERSHIP_BUILTIN(Trivial, ProjectTailElems)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, IsOptionalType)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, Sizeof)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, Strideof)
+CONSTANT_OWNERSHIP_BUILTIN(Trivial, StringObjectOr)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, IsPOD)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, IsSameMetatype)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, Alignof)
@@ -519,6 +527,7 @@ CONSTANT_OWNERSHIP_BUILTIN(Trivial, Once)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, OnceWithContext)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, TSanInoutAccess)
 CONSTANT_OWNERSHIP_BUILTIN(Trivial, Swift3ImplicitObjCEntrypoint)
+CONSTANT_OWNERSHIP_BUILTIN(Unowned, ValueToBridgeObject)
 
 #undef CONSTANT_OWNERSHIP_BUILTIN
 

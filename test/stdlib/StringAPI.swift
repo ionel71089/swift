@@ -92,7 +92,7 @@ let tests = [
   ComparisonTest(.eq, "\u{212b}", "A\u{30a}"),
   ComparisonTest(.eq, "\u{212b}", "\u{c5}"),
   ComparisonTest(.eq, "A\u{30a}", "\u{c5}"),
-  ComparisonTest(.lt, "A\u{30a}", "a"),
+  ComparisonTest(.gt, "A\u{30a}", "a"),
   ComparisonTest(.lt, "A", "A\u{30a}"),
 
   // U+2126 OHM SIGN
@@ -176,25 +176,7 @@ func checkStringComparison(
 
 // Mark the test cases that are expected to fail in checkStringComparison
 
-let comparisonTests = tests.map {
-  (test: ComparisonTest) -> ComparisonTest in
-  switch (test.expectedUnicodeCollation, test.lhs, test.rhs) {
-  case (.gt, "t", "Tt"), (.lt, "A\u{30a}", "a"):
-    return test.replacingPredicate(.nativeRuntime(
-      "Comparison reversed between ICU and CFString, https://bugs.swift.org/browse/SR-530"))
-
-  case (.gt, "\u{0}", ""), (.lt, "\u{0}", "\u{0}\u{0}"):
-    return test.replacingPredicate(.nativeRuntime(
-      "Null-related issue: https://bugs.swift.org/browse/SR-630"))
-
-  case (.lt, "\u{0301}", "\u{0954}"), (.lt, "\u{0341}", "\u{0954}"):
-    return test.replacingPredicate(.nativeRuntime(
-      "Compares as equal with ICU"))
-
-  default:
-    return test
-  }
-}
+let comparisonTests = tests
 
 for test in comparisonTests {
   StringTests.test("String.{Equatable,Hashable,Comparable}: line \(test.loc.line)")
@@ -228,7 +210,7 @@ func checkCharacterComparison(
 }
 
 for test in comparisonTests {
-  if test.lhs.characters.count == 1 && test.rhs.characters.count == 1 {
+  if test.lhs.count == 1 && test.rhs.count == 1 {
     StringTests.test("Character.{Equatable,Hashable,Comparable}: line \(test.loc.line)")
     .xfail(test.xfail)
     .code {
@@ -262,11 +244,11 @@ func checkHasPrefixHasSuffix(
   // To determine the expected results, compare grapheme clusters,
   // scalar-to-scalar, of the NFD form of the strings.
   let lhsNFDGraphemeClusters =
-    lhs.decomposedStringWithCanonicalMapping.characters.map {
+    lhs.decomposedStringWithCanonicalMapping.map {
       Array(String($0).unicodeScalars)
     }
   let rhsNFDGraphemeClusters =
-    rhs.decomposedStringWithCanonicalMapping.characters.map {
+    rhs.decomposedStringWithCanonicalMapping.map {
       Array(String($0).unicodeScalars)
     }
   let expectHasPrefix = lhsNFDGraphemeClusters.starts(

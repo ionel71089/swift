@@ -37,6 +37,7 @@ enum SILStringEncoding : uint8_t {
 
 enum SILLinkageEncoding : uint8_t {
   SIL_LINKAGE_PUBLIC,
+  SIL_LINKAGE_PUBLIC_NON_ABI,
   SIL_LINKAGE_HIDDEN,
   SIL_LINKAGE_SHARED,
   SIL_LINKAGE_PRIVATE,
@@ -45,7 +46,7 @@ enum SILLinkageEncoding : uint8_t {
   SIL_LINKAGE_SHARED_EXTERNAL,
   SIL_LINKAGE_PRIVATE_EXTERNAL,
 };
-using SILLinkageField = BCFixed<3>;
+using SILLinkageField = BCFixed<4>;
 
 enum SILVTableEntryKindEncoding : uint8_t {
   SIL_VTABLE_ENTRY_NORMAL,
@@ -279,6 +280,7 @@ namespace sil_block {
                      BCFixed<2>,  // side effect info.
                      BCVBR<8>,    // number of specialize attributes
                      BCFixed<1>,  // has qualified ownership
+                     BCFixed<1>,  // must be weakly referenced
                      TypeIDField, // SILFunctionType
                      GenericEnvironmentIDField,
                      DeclIDField, // ClangNode owner

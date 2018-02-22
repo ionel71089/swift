@@ -8,7 +8,6 @@ add_swift_library(swiftSema STATIC
   CSBindings.cpp
   CSDiag.cpp
   CSGen.cpp
-  CSPropagate.cpp
   CSRanking.cpp
   CSSimplify.cpp
   CSSolver.cpp
@@ -48,14 +47,13 @@ add_swift_library(swiftSema STATIC
   TypeCheckNameLookup.cpp
   TypeCheckPattern.cpp
   TypeCheckProtocol.cpp
+  TypeCheckProtocolInference.cpp
   TypeCheckREPL.cpp
   TypeCheckRequest.cpp
   TypeCheckStmt.cpp
   TypeCheckSwitchStmt.cpp
   TypeCheckType.cpp
   TypeChecker.cpp
-  DEPENDS
-    swift-syntax-generated-headers
   LINK_LIBRARIES
     swiftParse
     swiftAST

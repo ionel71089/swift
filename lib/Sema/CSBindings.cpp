@@ -278,6 +278,7 @@ ConstraintSystem::getPotentialBindings(TypeVariableType *typeVar) {
 
         result.foundLiteralBinding(constraint->getProtocol());
         result.addPotentialBinding({defaultType, AllowedBindingKind::Subtypes,
+                                    constraint->getKind(),
                                     constraint->getProtocol()});
         continue;
       }
@@ -305,6 +306,7 @@ ConstraintSystem::getPotentialBindings(TypeVariableType *typeVar) {
         result.foundLiteralBinding(constraint->getProtocol());
         exactTypes.insert(defaultType->getCanonicalType());
         result.addPotentialBinding({defaultType, AllowedBindingKind::Subtypes,
+                                    constraint->getKind(),
                                     constraint->getProtocol()});
       }
 
@@ -400,6 +402,15 @@ ConstraintSystem::getPotentialBindings(TypeVariableType *typeVar) {
     if (type->hasError())
       continue;
 
+    // If the source of the binding is 'OptionalObject' constraint
+    // and type variable is on the left-hand side, that means
+    // that it _has_ to be of optional type, since the right-hand
+    // side of the constraint is object type of the optional.
+    if (constraint->getKind() == ConstraintKind::OptionalObject &&
+        kind == AllowedBindingKind::Subtypes) {
+      type = OptionalType::get(type);
+    }
+
     // If the type we'd be binding to is a dependent member, don't try to
     // resolve this type variable yet.
     if (type->is<DependentMemberType>()) {
@@ -443,24 +454,10 @@ ConstraintSystem::getPotentialBindings(TypeVariableType *typeVar) {
       type = type->getWithoutImmediateLabel();
     }
 
-    // Don't deduce IUO types.
-    Type alternateType;
-    bool adjustedIUO = false;
-    if (kind == AllowedBindingKind::Supertypes &&
-        constraint->getKind() >= ConstraintKind::Conversion &&
-        constraint->getKind() <= ConstraintKind::OperatorArgumentConversion) {
-      auto innerType = type->getWithoutSpecifierType();
-      if (auto objectType =
-              lookThroughImplicitlyUnwrappedOptionalType(innerType)) {
-        type = OptionalType::get(objectType);
-        alternateType = objectType;
-        adjustedIUO = true;
-      }
-    }
-
     // Make sure we aren't trying to equate type variables with different
     // lvalue-binding rules.
-    if (auto otherTypeVar = type->getAs<TypeVariableType>()) {
+    if (auto otherTypeVar =
+            type->lookThroughAllOptionalTypes()->getAs<TypeVariableType>()) {
       if (typeVar->getImpl().canBindToLValue() !=
           otherTypeVar->getImpl().canBindToLValue())
         continue;
@@ -481,12 +478,7 @@ ConstraintSystem::getPotentialBindings(TypeVariableType *typeVar) {
     }
 
     if (exactTypes.insert(type->getCanonicalType()).second)
-      result.addPotentialBinding({type, kind, None},
-                                 /*allowJoinMeet=*/!adjustedIUO);
-    if (alternateType &&
-        exactTypes.insert(alternateType->getCanonicalType()).second)
-      result.addPotentialBinding({alternateType, kind, None},
-                                 /*allowJoinMeet=*/false);
+      result.addPotentialBinding({type, kind, constraint->getKind()});
   }
 
   // If we have any literal constraints, check whether there is already a
@@ -529,7 +521,7 @@ ConstraintSystem::getPotentialBindings(TypeVariableType *typeVar) {
           // FIXME: This is really crappy special case of computing a reasonable
           // result based on the given constraints.
           if (binding.Kind == AllowedBindingKind::Subtypes) {
-            if (auto objTy = testType->getAnyOptionalObjectType()) {
+            if (auto objTy = testType->getOptionalObjectType()) {
               updatedBindingType = true;
               testType = objTy;
               continue;
@@ -566,8 +558,9 @@ ConstraintSystem::getPotentialBindings(TypeVariableType *typeVar) {
       continue;
 
     ++result.NumDefaultableBindings;
-    result.addPotentialBinding(
-        {type, AllowedBindingKind::Exact, None, constraint->getLocator()});
+    result.addPotentialBinding({type, AllowedBindingKind::Exact,
+                                constraint->getKind(), None,
+                                constraint->getLocator()});
   }
 
   // Determine if the bindings only constrain the type variable from above with

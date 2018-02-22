@@ -30,6 +30,7 @@ namespace llvm {
 
 namespace swift {
   class AbstractFunctionDecl;
+  class FileUnit;
   class FuncDecl;
   enum class ResilienceExpansion : unsigned;
   struct SILDeclRef;
@@ -40,6 +41,7 @@ namespace swift {
 namespace irgen {
   class Callee;
   class ConstantReference;
+  class ConstantStructBuilder;
   class Explosion;
   class FieldTypeInfo;
   class FunctionPointer;
@@ -67,7 +69,8 @@ namespace irgen {
   void emitLazyCacheAccessFunction(IRGenModule &IGM,
                                    llvm::Function *accessor,
                                    llvm::GlobalVariable *cacheVariable,
-        const llvm::function_ref<llvm::Value *(IRGenFunction &IGF)> &getValue);
+        const llvm::function_ref<llvm::Value *(IRGenFunction &IGF)> &getValue,
+        bool isReadNone = true);
 
   /// Emit a declaration reference to a metatype object.
   void emitMetatypeRef(IRGenFunction &IGF, CanMetatypeType type,
@@ -123,6 +126,11 @@ namespace irgen {
   llvm::Constant *emitForeignTypeMetadataInitializer(IRGenModule &IGM,
                                                      CanType type,
                                                      Size &addressPointOffset);
+
+  /// Emit a type context descriptor that was demanded by a reference from
+  /// other generated definitions.
+  void emitLazyTypeContextDescriptor(IRGenModule &IGM,
+                                     NominalTypeDecl *theStruct);
 
   /// Emit the metadata associated with the given struct declaration.
   void emitStructMetadata(IRGenModule &IGM, StructDecl *theStruct);
@@ -223,6 +231,12 @@ namespace irgen {
                                                 SILType objectType,
                                                 bool suppressCast = false);
 
+  /// Given a metadata pointer, emit the callee for the given method.
+  FunctionPointer emitVirtualMethodValue(IRGenFunction &IGF,
+                                         llvm::Value *metadata,
+                                         SILDeclRef method,
+                                         CanSILFunctionType methodType);
+
   /// Given an instance pointer (or, for a static method, a class
   /// pointer), emit the callee for the given method.
   FunctionPointer emitVirtualMethodValue(IRGenFunction &IGF,
@@ -255,10 +269,10 @@ namespace irgen {
 
   /// \brief Initialize the field offset vector within the given class or struct
   /// metadata.
-  llvm::Value *emitInitializeFieldOffsetVector(IRGenFunction &IGF,
-                                               SILType T,
-                                               llvm::Value *metadata,
-                                               llvm::Value *vwtable);
+  void emitInitializeFieldOffsetVector(IRGenFunction &IGF,
+                                       SILType T,
+                                       llvm::Value *metadata,
+                                       bool isVWTMutable);
 
   /// Adjustment indices for the address points of various metadata.
   /// Size is in words.
@@ -310,6 +324,25 @@ namespace irgen {
   /// Use the argument as the 'self' type metadata.
   void getArgAsLocalSelfTypeMetadata(IRGenFunction &IGF, llvm::Value *arg,
                                      CanType abstractType);
+
+  /// Description of the metadata emitted by adding generic requirements.
+  struct GenericRequirementsMetadata {
+    unsigned NumRequirements = 0;
+    unsigned NumGenericKeyArguments = 0;
+    unsigned NumGenericExtraArguments = 0;
+  };
+
+  /// Add generic requirements to the given constant struct builder.
+  ///
+  /// \param sig The generic signature against which the requirements are
+  /// described.
+  ///
+  /// \param requirements The requirements to add.
+  GenericRequirementsMetadata addGenericRequirements(
+                                          IRGenModule &IGM,
+                                          ConstantStructBuilder &B,
+                                          GenericSignature *sig,
+                                          ArrayRef<Requirement> requirements);
 
 } // end namespace irgen
 } // end namespace swift

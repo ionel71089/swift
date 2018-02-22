@@ -7,7 +7,7 @@ enum Downgradable {
   case fork
 }
 
-// CHECK-LABEL: sil hidden @_T029downgrade_exhaustivity_swift343testDowngradableOmittedPatternIsUnreachableyAA0E0OSg3pat_tF
+// CHECK-LABEL: sil hidden @$S29downgrade_exhaustivity_swift343testDowngradableOmittedPatternIsUnreachable3patyAA0E0OSg_tF
 func testDowngradableOmittedPatternIsUnreachable(pat : Downgradable?) {
   // CHECK: switch_enum {{%.*}} : $Downgradable, case #Downgradable.spoon!enumelt: [[CASE1:bb[0-9]+]], case #Downgradable.hat!enumelt: [[CASE2:bb[0-9]+]], default [[DEFAULT_CASE:bb[0-9]+]]
   switch pat! {
@@ -18,6 +18,7 @@ func testDowngradableOmittedPatternIsUnreachable(pat : Downgradable?) {
   case .hat:
     break
   // CHECK: [[DEFAULT_CASE]]({{%.*}} : @trivial $Downgradable):
+  // CHECK-NEXT:   builtin "int_trap"()
   // CHECK-NEXT:   unreachable
   }
   
@@ -33,14 +34,17 @@ func testDowngradableOmittedPatternIsUnreachable(pat : Downgradable?) {
   case (.hat, .hat):
     break
   // CHECK: [[TUPLE_DEFAULT_CASE_2]]({{%.*}} : @trivial $Downgradable):
+  // CHECK-NEXT:   builtin "int_trap"()
   // CHECK-NEXT:   unreachable
     
   // CHECK: switch_enum [[Y]] : $Downgradable, case #Downgradable.spoon!enumelt: {{bb[0-9]+}}, case #Downgradable.hat!enumelt: {{bb[0-9]+}}, default [[TUPLE_DEFAULT_CASE_3:bb[0-9]+]]
     
   // CHECK: [[TUPLE_DEFAULT_CASE_3]]({{%.*}} : @trivial $Downgradable):
+  // CHECK-NEXT:   builtin "int_trap"()
   // CHECK-NEXT:   unreachable
     
   // CHECK: [[TUPLE_DEFAULT_CASE_1]]({{%.*}} : @trivial $Downgradable):
+  // CHECK-NEXT:   builtin "int_trap"()
   // CHECK-NEXT:   unreachable
   }
   

@@ -286,7 +286,7 @@ public:
   //===--------------------------------------------------------------------===//
 
   AllocStackInst *createAllocStack(SILLocation Loc, SILType elementType,
-                                   SILDebugVariable Var = SILDebugVariable()) {
+                                   Optional<SILDebugVariable> Var = None) {
     Loc.markAsPrologue();
     return insert(AllocStackInst::create(getSILDebugLocation(Loc),
                                          elementType, getFunction(),
@@ -327,7 +327,7 @@ public:
   }
 
   AllocBoxInst *createAllocBox(SILLocation Loc, CanSILBoxType BoxType,
-                               SILDebugVariable Var = SILDebugVariable()) {
+                               Optional<SILDebugVariable> Var = None) {
     Loc.markAsPrologue();
     return insert(AllocBoxInst::create(getSILDebugLocation(Loc), BoxType, *F,
                                        OpenedArchetypes, Var));
@@ -540,7 +540,7 @@ public:
   LoadInst *createTrivialLoadOr(SILLocation Loc, SILValue LV,
                                 LoadOwnershipQualifier Qualifier,
                                 bool SupportUnqualifiedSIL = false) {
-    if (SupportUnqualifiedSIL && getFunction().hasUnqualifiedOwnership()) {
+    if (SupportUnqualifiedSIL && !getFunction().hasQualifiedOwnership()) {
       assert(
           Qualifier != LoadOwnershipQualifier::Copy &&
           "In unqualified SIL, a copy must be done separately form the load");
@@ -556,7 +556,7 @@ public:
   LoadInst *createLoad(SILLocation Loc, SILValue LV,
                        LoadOwnershipQualifier Qualifier) {
     assert((Qualifier != LoadOwnershipQualifier::Unqualified) ||
-           getFunction().hasUnqualifiedOwnership() &&
+           !getFunction().hasQualifiedOwnership() &&
                "Unqualified inst in qualified function");
     assert((Qualifier == LoadOwnershipQualifier::Unqualified) ||
            getFunction().hasQualifiedOwnership() &&
@@ -610,7 +610,7 @@ public:
                                   SILValue DestAddr,
                                   StoreOwnershipQualifier Qualifier,
                                   bool SupportUnqualifiedSIL = false) {
-    if (SupportUnqualifiedSIL && getFunction().hasUnqualifiedOwnership()) {
+    if (SupportUnqualifiedSIL && !getFunction().hasQualifiedOwnership()) {
       assert(
           Qualifier != StoreOwnershipQualifier::Assign &&
           "In unqualified SIL, assigns must be represented via 2 instructions");
@@ -626,7 +626,7 @@ public:
   StoreInst *createStore(SILLocation Loc, SILValue Src, SILValue DestAddr,
                          StoreOwnershipQualifier Qualifier) {
     assert((Qualifier != StoreOwnershipQualifier::Unqualified) ||
-           getFunction().hasUnqualifiedOwnership() &&
+           !getFunction().hasQualifiedOwnership() &&
                "Unqualified inst in qualified function");
     assert((Qualifier == StoreOwnershipQualifier::Unqualified) ||
            getFunction().hasQualifiedOwnership() &&
@@ -733,13 +733,13 @@ public:
   }
 
   DebugValueInst *createDebugValue(SILLocation Loc, SILValue src,
-                                   SILDebugVariable Var = SILDebugVariable()) {
+                                   SILDebugVariable Var) {
     return insert(DebugValueInst::create(getSILDebugLocation(Loc), src,
                                          getModule(), Var));
   }
   DebugValueAddrInst *
   createDebugValueAddr(SILLocation Loc, SILValue src,
-                       SILDebugVariable Var = SILDebugVariable()) {
+                       SILDebugVariable Var) {
     return insert(DebugValueAddrInst::create(getSILDebugLocation(Loc), src,
                                              getModule(), Var));
   }
@@ -787,6 +787,12 @@ public:
                                              SILType Ty) {
     return insert(ConvertFunctionInst::create(getSILDebugLocation(Loc), Op, Ty,
                                               getFunction(), OpenedArchetypes));
+  }
+
+  ConvertEscapeToNoEscapeInst *
+  createConvertEscapeToNoEscape(SILLocation Loc, SILValue Op, SILType Ty) {
+    return insert(ConvertEscapeToNoEscapeInst::create(
+        getSILDebugLocation(Loc), Op, Ty, getFunction(), OpenedArchetypes));
   }
 
   ThinFunctionToPointerInst *
@@ -862,6 +868,13 @@ public:
                                                  SILType Ty) {
     return insert(new (getModule()) BridgeObjectToRefInst(
         getSILDebugLocation(Loc), Op, Ty));
+  }
+
+  ValueToBridgeObjectInst *createValueToBridgeObject(SILLocation Loc,
+                                                     SILValue value) {
+    auto Ty = SILType::getBridgeObjectType(getASTContext());
+    return insert(new (getModule()) ValueToBridgeObjectInst(
+        getSILDebugLocation(Loc), value, Ty));
   }
 
   BridgeObjectToWordInst *createBridgeObjectToWord(SILLocation Loc,
@@ -959,21 +972,21 @@ public:
 
   RetainValueInst *createRetainValue(SILLocation Loc, SILValue operand,
                                      Atomicity atomicity) {
-    assert(isParsing || getFunction().hasUnqualifiedOwnership());
+    assert(isParsing || !getFunction().hasQualifiedOwnership());
     return insert(new (getModule()) RetainValueInst(getSILDebugLocation(Loc),
                                                       operand, atomicity));
   }
 
   RetainValueAddrInst *createRetainValueAddr(SILLocation Loc, SILValue operand,
                                              Atomicity atomicity) {
-    assert(isParsing || getFunction().hasUnqualifiedOwnership());
+    assert(isParsing || !getFunction().hasQualifiedOwnership());
     return insert(new (getModule()) RetainValueAddrInst(
         getSILDebugLocation(Loc), operand, atomicity));
   }
 
   ReleaseValueInst *createReleaseValue(SILLocation Loc, SILValue operand,
                                        Atomicity atomicity) {
-    assert(isParsing || getFunction().hasUnqualifiedOwnership());
+    assert(isParsing || !getFunction().hasQualifiedOwnership());
     return insert(new (getModule()) ReleaseValueInst(getSILDebugLocation(Loc),
                                                        operand, atomicity));
   }
@@ -981,7 +994,7 @@ public:
   ReleaseValueAddrInst *createReleaseValueAddr(SILLocation Loc,
                                                SILValue operand,
                                                Atomicity atomicity) {
-    assert(isParsing || getFunction().hasUnqualifiedOwnership());
+    assert(isParsing || !getFunction().hasQualifiedOwnership());
     return insert(new (getModule()) ReleaseValueAddrInst(
         getSILDebugLocation(Loc), operand, atomicity));
   }
@@ -1282,11 +1295,10 @@ public:
 
   WitnessMethodInst *createWitnessMethod(SILLocation Loc, CanType LookupTy,
                                          ProtocolConformanceRef Conformance,
-                                         SILDeclRef Member, SILType MethodTy,
-                                         bool Volatile = false) {
+                                         SILDeclRef Member, SILType MethodTy) {
     return insert(WitnessMethodInst::create(
         getSILDebugLocation(Loc), LookupTy, Conformance, Member, MethodTy,
-        &getFunction(), OpenedArchetypes, Volatile));
+        &getFunction(), OpenedArchetypes));
   }
 
   OpenExistentialAddrInst *
@@ -1450,13 +1462,13 @@ public:
   }
   StrongRetainInst *createStrongRetain(SILLocation Loc, SILValue Operand,
                                        Atomicity atomicity) {
-    assert(isParsing || getFunction().hasUnqualifiedOwnership());
+    assert(isParsing || !getFunction().hasQualifiedOwnership());
     return insert(new (getModule()) StrongRetainInst(getSILDebugLocation(Loc),
                                                        Operand, atomicity));
   }
   StrongReleaseInst *createStrongRelease(SILLocation Loc, SILValue Operand,
                                          Atomicity atomicity) {
-    assert(isParsing || getFunction().hasUnqualifiedOwnership());
+    assert(isParsing || !getFunction().hasQualifiedOwnership());
     return insert(new (getModule()) StrongReleaseInst(
         getSILDebugLocation(Loc), Operand, atomicity));
   }
@@ -1508,6 +1520,8 @@ public:
       return;
     createFixLifetime(Loc, Operand);
   }
+  ClassifyBridgeObjectInst *createClassifyBridgeObject(SILLocation Loc,
+                                                       SILValue value);
   MarkDependenceInst *createMarkDependence(SILLocation Loc, SILValue value,
                                            SILValue base) {
     return insert(new (getModule()) MarkDependenceInst(
@@ -1911,53 +1925,6 @@ public:
     assert(!v->getType().isAddress());
     auto &lowering = getTypeLowering(v->getType());
     lowering.emitDestroyValue(*this, Loc, v);
-  }
-
-  /// Convenience function for handling begin_borrow instructions in ownership
-  /// and non-ownership SIL. In non-ownership SIL we just forward the input
-  /// value. Otherwise, we emit the begin_borrow instruction.
-  SILValue emitBeginBorrowOperation(SILLocation Loc, SILValue Value) {
-    assert(!Value->getType().isAddress());
-    // If ownership is not enabled in the function, just return our original
-    // value.
-    if (getFunction().hasUnqualifiedOwnership())
-      return Value;
-
-    // If we have a trivial value, just return the value. Trivial values have
-    // lifetimes independent of any other values.
-    //
-    // *NOTE* For now to be conservative since we do not have the ownership
-    // verifier everywhere, we use getType()::isTrivial() instead of
-    // getOwnershipKind().
-    if (Value->getType().isTrivial(getModule())) {
-      return Value;
-    }
-
-    // Otherwise, we have a non-trivial value, perform the borrow.
-    return createBeginBorrow(Loc, Value);
-  }
-
-  /// Convenience function for handling end_borrow instructions in ownership and
-  /// non-ownership SIL. In non-ownership SIL we just early exit. Otherwise, we
-  /// emit the end_borrow.
-  void emitEndBorrowOperation(SILLocation Loc, SILValue Borrowed,
-                              SILValue Original) {
-    assert(!Borrowed->getType().isAddress());
-    // If ownership is not enabled, just return.
-    if (getFunction().hasUnqualifiedOwnership())
-      return;
-
-    // If we have a trivial value, just return. Trivial values have lifetimes
-    // independent of any other values.
-    //
-    // *NOTE* For now to be conservative since we do not have the ownership
-    // verifier everywhere, we use getType()::isTrivial() instead of
-    // getOwnershipKind().
-    if (Borrowed->getType().isTrivial(getModule())) {
-      return;
-    }
-
-    createEndBorrow(Loc, Borrowed, Original);
   }
 
   SILValue emitTupleExtract(SILLocation Loc, SILValue Operand, unsigned FieldNo,

@@ -95,10 +95,12 @@ namespace irgen {
   typedef llvm::ArrayRef<std::pair<SILType, llvm::Value *>> TailArraysRef;
 
   /// Adds the size for tail allocated arrays to \p size and returns the new
-  /// size value.
-  llvm::Value *appendSizeForTailAllocatedArrays(IRGenFunction &IGF,
-                                                llvm::Value *size,
-                                                TailArraysRef TailArrays);
+  /// size value. Also updades the alignment mask to represent the alignment of
+  /// the largest element.
+  std::pair<llvm::Value *, llvm::Value *>
+  appendSizeForTailAllocatedArrays(IRGenFunction &IGF,
+                                   llvm::Value *size, llvm::Value *alignMask,
+                                   TailArraysRef TailArrays);
 
   /// Emit an allocation of a class.
   /// The \p StackAllocSize is an in- and out-parameter. The passed value
@@ -172,13 +174,12 @@ namespace irgen {
   bool doesClassMetadataRequireDynamicInitialization(IRGenModule &IGM,
                                                      ClassDecl *theClass);
     
-  /// Returns true if a conformance of the \p conformingType references the
-  /// nominal type descriptor of the type.
-  ///
-  /// Otherwise the conformance references the foreign metadata of the
-  /// \p conformingType.
-  bool doesConformanceReferenceNominalTypeDescriptor(IRGenModule &IGM,
-                                                     CanType conformingType);
+  /// If the superclass came from another module, we may have dropped
+  /// stored properties due to the Swift language version availability of
+  /// their types. In these cases we can't precisely lay out the ivars in
+  /// the class object at compile time so we need to do runtime layout.
+  bool classHasIncompleteLayout(IRGenModule &IGM,
+                                ClassDecl *theClass);
 } // end namespace irgen
 } // end namespace swift
 

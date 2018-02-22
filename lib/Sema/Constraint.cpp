@@ -358,6 +358,9 @@ void Constraint::print(llvm::raw_ostream &Out, SourceManager *sm) const {
       Out << "decl-via-unwrapped-optional ";
       printDecl();
       break;
+    case OverloadChoiceKind::DynamicMemberLookup:
+      Out << "dynamic member lookup '" << overload.getName() << "'";
+      break;
     case OverloadChoiceKind::BaseType:
       Out << "base type";
       break;
@@ -493,8 +496,6 @@ Type Fix::getTypeArgument(ConstraintSystem &cs) const {
 
 StringRef Fix::getName(FixKind kind) {
   switch (kind) {
-  case FixKind::None:
-    return "prevent fixes";
   case FixKind::ForceOptional:
     return "fix: force optional";
   case FixKind::OptionalChaining:

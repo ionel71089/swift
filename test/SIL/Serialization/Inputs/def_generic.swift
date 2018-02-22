@@ -1,3 +1,4 @@
+@_fixed_layout
 public class A<T> {
   typealias Element = T
   @_versioned
@@ -9,4 +10,8 @@ public class A<T> {
   @_versioned
   @_inlineable
   init() {}
+
+  @_inlineable public subscript<U>(value: T) -> U? {
+    return nil
+  }
 }

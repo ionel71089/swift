@@ -17,7 +17,7 @@ the other hand, `clang-cl` is able to build the runtime, which makes it
 possible to build and run all the components required for Swift natively on
 Windows.
 
-## MSVC
+## `clang-cl`
 - Windows doesn't currently have a build script. You'll need to run commands
   manually to build Swift on Windows.
 - Windows support for Swift is a work in progress and may not work on your
@@ -83,11 +83,11 @@ set swift_source_dir=path-to-directory-containing-all-cloned-repositories
 - This must be done from within a developer command prompt. CMark is a fairly
   small project and should only take a few minutes to build.
 ```cmd
-mkdir "%swift_source_dir%/build/Ninja-DebugAssert/cmark-windows-amd64"
-pushd "%swift_source_dir%/build/Ninja-DebugAssert/cmark-windows-amd64"
+mkdir "%swift_source_dir%/build/Ninja-RelWithDebInfoAssert/cmark-windows-amd64"
+pushd "%swift_source_dir%/build/Ninja-RelWithDebInfoAssert/cmark-windows-amd64"
 cmake -G "Ninja" "%swift_source_dir%/cmark"
 popd
-cmake --build "%swift_source_dir%/build/Ninja-DebugAssert/cmark-windows-amd64/"
+cmake --build "%swift_source_dir%/build/Ninja-RelWithDebInfoAssert/cmark-windows-amd64/"
 ```
 
 ### 6. Build LLVM/Clang/Compiler-RT
@@ -129,6 +129,52 @@ pushd "%swift_source_dir%/build/Ninja-DebugAssert/swift-windows-amd64/ninja"
 cmake -G "Ninja" "%swift_source_dir%/swift"^
  -DCMAKE_BUILD_TYPE=Debug^
  -DSWIFT_PATH_TO_CMARK_SOURCE="%swift_source_dir%/cmark"^
+ -DSWIFT_PATH_TO_CMARK_BUILD="%swift_source_dir%/build/Ninja-RelWithDebInfoAssert/cmark-windows-amd64"^
+ -DSWIFT_CMARK_LIBRARY_DIR="%swift_source_dir%/build/Ninja-RelWithDebInfoAssert/cmark-windows-amd64/src"^
+ -DSWIFT_PATH_TO_LLVM_SOURCE="%swift_source_dir%/llvm"^
+ -DSWIFT_PATH_TO_LLVM_BUILD="%swift_source_dir%/build/Ninja-RelWithDebInfoAssert/llvm-windows-amd64"^
+ -DSWIFT_PATH_TO_CLANG_SOURCE="%swift_source_dir%/llvm/tools/clang"^
+ -DSWIFT_PATH_TO_CLANG_BUILD="%swift_source_dir%/build/Ninja-RelWithDebInfoAssert/llvm-windows-amd64"^
+ -DICU_UC_INCLUDE_DIRS="%swift_source_dir%/icu/include"^
+ -DICU_UC_LIBRARY_DIRS="%swift_source_dir%/icu/lib64"^
+ -DICU_I18N_INCLUDE_DIRS="%swift_source_dir%/icu/include"^
+ -DICU_I18N_LIBRARY_DIRS="%swift_source_dir%/icu/lib64"^
+ -DICU_UC_LIB_NAME="icuuc"^
+ -DICU_I18N_LIB_NAME="icuin"^
+ -DSWIFT_INCLUDE_DOCS=FALSE^
+ -DSWIFT_INCLUDE_TESTS=FALSE^
+ -DCMAKE_C_COMPILER="<path-to-llvm-bin>/clang-cl.exe"^
+ -DCMAKE_CXX_COMPILER="<path-to-llvm-bin>/bin/clang-cl.exe"^
+ -DCMAKE_C_FLAGS="-fms-compatibility-version=19.00 /Z7"^
+ -DCMAKE_CXX_FLAGS="-fms-compatibility-version=19.00 -Z7" ^
+ -DSWIFT_BUILD_RUNTIME_WITH_HOST_COMPILER=FALSE
+popd
+cmake --build "%swift_source_dir%/build/Ninja-DebugAssert/swift-windows-amd64/ninja"
+```
+
+- To create a Visual Studio project, you'll need to change the generator and,
+  if you have a 64 bit processor, specify the generator platform. Note that you
+  may get multiple build errors compiling the `swift` project due to an MSBuild
+  limitation that file paths cannot exceed 260 characters. These can be
+  ignored, as they occur after the build when writing the last build status to
+  a file.
+
+```cmd
+cmake -G "Visual Studio 15" "%swift_source_dir%/swift"^
+ -DCMAKE_GENERATOR_PLATFORM="x64"^
+ ...
+```
+
+## MSVC
+
+Follow instructions 1-6 for `clang-cl`, but run the following instead to build Swift
+
+```cmd
+mkdir "%swift_source_dir%/build/Ninja-DebugAssert/swift-windows-amd64/ninja"
+pushd "%swift_source_dir%/build/Ninja-DebugAssert/swift-windows-amd64/ninja"
+cmake -G "Ninja" "%swift_source_dir%/swift"^
+ -DCMAKE_BUILD_TYPE=Debug^
+ -DSWIFT_PATH_TO_CMARK_SOURCE="%swift_source_dir%/cmark"^
  -DSWIFT_PATH_TO_CMARK_BUILD="%swift_source_dir%/build/Ninja-DebugAssert/cmark-windows-amd64"^
  -DSWIFT_CMARK_LIBRARY_DIR="%swift_source_dir%/build/Ninja-DebugAssert/cmark-windows-amd64/src"^
  -DSWIFT_PATH_TO_LLVM_SOURCE="%swift_source_dir%/llvm"^
@@ -147,31 +193,4 @@ cmake -G "Ninja" "%swift_source_dir%/swift"^
  -DSWIFT_BUILD_RUNTIME_WITH_HOST_COMPILER=FALSE
 popd
 cmake --build "%swift_source_dir%/build/Ninja-DebugAssert/swift-windows-amd64/ninja"
-```
-
-- To create a Visual Studio project, you'll need to change the generator and,
-  if you have a 64 bit processor, specify the generator platform. Note that you
-  may get multiple build errors compiling the `swift` project due to an MSBuild
-  limitation that file paths cannot exceed 260 characters. These can be
-  ignored, as they occur after the build when writing the last build status to
-  a file.
-```cmd
-cmake -G "Visual Studio 15" "%swift_source_dir%/swift"^
- -DCMAKE_GENERATOR_PLATFORM="x64"^
- ...
-```
-
-## Clang-cl
-
-Follow the instructions for MSVC, but add the following lines to each CMake
-configuration command. `clang-cl` 4.0.1 has been tested. You can remove the
-`SWIFT_BUILD_DYNAMIC_SDK_OVERLAY=FALSE` definition, as overlays are supported
-with `clang-cl`, as it supports modules. The `Z7` flag is required to produce
-PDB files that MSVC's `link.exe` can read and enables proper stack traces.
-
-```cmd
- -DCMAKE_C_COMPILER="<path-to-llvm-bin>/clang-cl.exe"^
- -DCMAKE_CXX_COMPILER="<path-to-llvm-bin>/bin/clang-cl.exe"^
- -DCMAKE_C_FLAGS="-fms-compatibility-version=19.00 /Z7"^
- -DCMAKE_CXX_FLAGS="-fms-compatibility-version=19.00 -Z7" ^
 ```

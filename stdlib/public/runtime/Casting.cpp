@@ -14,12 +14,20 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/Runtime/Casting.h"
+#include "../SwiftShims/RuntimeShims.h"
+#include "ErrorObject.h"
+#include "ExistentialMetadataImpl.h"
+#include "Private.h"
+#include "SwiftHashableSupport.h"
+#include "stddef.h"
 #include "swift/Basic/LLVM.h"
 #include "swift/Basic/Lazy.h"
 #include "swift/Demangling/Demangler.h"
-#include "swift/Runtime/Casting.h"
 #include "swift/Runtime/Config.h"
+#include "swift/Runtime/Debug.h"
 #include "swift/Runtime/Enum.h"
+#include "swift/Runtime/ExistentialContainer.h"
 #include "swift/Runtime/HeapObject.h"
 #include "swift/Runtime/Metadata.h"
 #include "swift/Runtime/Mutex.h"
@@ -27,13 +35,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/Support/Compiler.h"
-#include "swift/Runtime/Debug.h"
-#include "ErrorObject.h"
-#include "ExistentialMetadataImpl.h"
-#include "Private.h"
-#include "SwiftHashableSupport.h"
-#include "../SwiftShims/RuntimeShims.h"
-#include "stddef.h"
 #if SWIFT_OBJC_INTEROP
 #include "swift/Runtime/ObjCBridge.h"
 #include "SwiftValue.h"
@@ -74,7 +75,7 @@ static void _buildNameForMetadata(const Metadata *type,
     auto classType = static_cast<const ClassMetadata *>(type);
     // Look through artificial subclasses.
     while (classType->isTypeMetadata() && classType->isArtificialSubclass())
-      classType = classType->SuperClass;
+      classType = classType->Superclass;
 
     // Ask the Objective-C runtime to name ObjC classes.
     if (!classType->isTypeMetadata()) {
@@ -261,7 +262,7 @@ _dynamicCastClassMetatype(const ClassMetadata *sourceType,
     if (sourceType == targetType) {
       return sourceType;
     }
-    sourceType = sourceType->SuperClass;
+    sourceType = sourceType->Superclass;
   } while (sourceType);
   
   return nullptr;
@@ -3227,7 +3228,7 @@ SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERNAL
 const Metadata *swift::_swift_class_getSuperclass(const Metadata *theClass) {
   if (const ClassMetadata *classType = theClass->getClassObject())
     if (classHasSuperclass(classType))
-      return getMetadataForClass(classType->SuperClass);
+      return getMetadataForClass(classType->Superclass);
   return nullptr;
 }
 

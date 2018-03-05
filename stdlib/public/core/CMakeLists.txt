@@ -48,7 +48,7 @@ set(SWIFTLIB_ESSENTIAL
   CTypes.swift
   DebuggerSupport.swift
   DoubleWidth.swift.gyb
-  DropWhile.swift.gyb
+  DropWhile.swift
   Dump.swift
   EmptyCollection.swift
   Equatable.swift
@@ -89,19 +89,18 @@ set(SWIFTLIB_ESSENTIAL
   MutableCollection.swift
   NewtypeWrapper.swift.gyb
   NormalizedCodeUnitIterator.swift
-  ObjCMirrors.swift
   ObjectIdentifier.swift
   Optional.swift
   OptionSet.swift
   OutputStream.swift
   Pointer.swift
   Policy.swift
-  PrefixWhile.swift.gyb
+  PrefixWhile.swift
   Print.swift
   RandomAccessCollection.swift
   Range.swift
   RangeReplaceableCollection.swift
-  ReflectionLegacy.swift
+  ReflectionMirror.swift
   Repeat.swift
   REPL.swift
   Reverse.swift
@@ -110,7 +109,7 @@ set(SWIFTLIB_ESSENTIAL
   SipHash.swift.gyb
   SentinelCollection.swift
   Sequence.swift
-  SequenceAlgorithms.swift.gyb
+  SequenceAlgorithms.swift
   SequenceWrapper.swift
   SetAlgebra.swift
   ShadowProtocols.swift

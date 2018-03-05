@@ -952,11 +952,13 @@ fi
 # Xcode generator.
 if [[ "${CMAKE_GENERATOR}" == "Xcode" ]]; then
     SKIP_BUILD_COMPILER_RT=1
+    echo "Skipping #1"
 fi
 
 # FIXME: We currently do not support cross-compiling swift with compiler-rt.
 if [[ "${CROSS_COMPILE_HOSTS}" ]]; then
     SKIP_BUILD_COMPILER_RT=1
+    echo "Skipping #2"
 fi
 
 if [[ "${SKIP_RECONFIGURE}" ]]; then

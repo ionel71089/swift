@@ -732,7 +732,10 @@ function set_build_options_for_host() {
     esac
 
     echo "IONEL: SKIP_BUILD_COMPILER_RT:"
-    echo "$SKIP_BUILD_COMPILER_RT"
+
+    #SKIP_BUILD_COMPILER_RT="muie"
+    #echo "$SKIP_BUILD_COMPILER_RT"
+    #SKIP_BUILD_COMPILER_RT=0 
     
 
     llvm_cmake_options+=(
@@ -740,7 +743,7 @@ function set_build_options_for_host() {
         -DLLVM_BUILD_EXTERNAL_COMPILER_RT:BOOL="$(false_true ${SKIP_BUILD_COMPILER_RT})"
     )
 
-    echo "$llvm_cmake_options"
+    printf '%s\n' "${llvm_cmake_options[@]}"
     echo "Exiting"
     exit 1
 
@@ -952,13 +955,13 @@ fi
 # Xcode generator.
 if [[ "${CMAKE_GENERATOR}" == "Xcode" ]]; then
     SKIP_BUILD_COMPILER_RT=1
-    echo "Skipping #1"
+    echo "Ionel: Skipping #1"
 fi
 
 # FIXME: We currently do not support cross-compiling swift with compiler-rt.
 if [[ "${CROSS_COMPILE_HOSTS}" ]]; then
     SKIP_BUILD_COMPILER_RT=1
-    echo "Skipping #2"
+    echo "Ionel: Skipping #2"
 fi
 
 if [[ "${SKIP_RECONFIGURE}" ]]; then

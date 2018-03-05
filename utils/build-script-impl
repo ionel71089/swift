@@ -735,7 +735,7 @@ function set_build_options_for_host() {
 
     #SKIP_BUILD_COMPILER_RT="muie"
     #echo "$SKIP_BUILD_COMPILER_RT"
-    #SKIP_BUILD_COMPILER_RT=0 
+    SKIP_BUILD_COMPILER_RT=1
     
 
     llvm_cmake_options+=(
@@ -743,9 +743,9 @@ function set_build_options_for_host() {
         -DLLVM_BUILD_EXTERNAL_COMPILER_RT:BOOL="$(false_true ${SKIP_BUILD_COMPILER_RT})"
     )
 
-    printf '%s\n' "${llvm_cmake_options[@]}"
-    echo "Exiting"
-    exit 1
+    # printf '%s\n' "${llvm_cmake_options[@]}"
+    # echo "Exiting"
+    # exit 1
 
     # If we are asked to not generate test targets for LLVM and or Swift,
     # disable as many LLVM tools as we can. This improves compile time when

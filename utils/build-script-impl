@@ -735,7 +735,7 @@ function set_build_options_for_host() {
 
     #SKIP_BUILD_COMPILER_RT="muie"
     #echo "$SKIP_BUILD_COMPILER_RT"
-    # SKIP_BUILD_COMPILER_RT=1
+    SKIP_BUILD_COMPILER_RT=0
     
     read -p "Press enter to continue"
 
@@ -747,7 +747,7 @@ function set_build_options_for_host() {
     printf '%s\n' "${llvm_cmake_options[@]}"
 
     read -p "Press enter to continue"
-    
+
     # echo "Exiting"
     # exit 1
 

@@ -192,7 +192,7 @@ static int swift_snprintf_l(char *Str, size_t StrSize, locale_t Locale,
 
 template <typename T>
 static uint64_t swift_floatingPointToString(char *Buffer, size_t BufferLength,
-                                            T Value, const char *Format, 
+                                            T Value, const char *Format,
                                             bool Debug) {
   if (BufferLength < 32)
     swift::crash("swift_floatingPointToString: insufficient buffer size");
@@ -203,7 +203,7 @@ static uint64_t swift_floatingPointToString(char *Buffer, size_t BufferLength,
   }
 
 #if defined(__CYGWIN__) || defined(_WIN32) || defined(__HAIKU__)
-  // Cygwin does not support uselocale(), but we can use the locale feature 
+  // Cygwin does not support uselocale(), but we can use the locale feature
   // in stringstream object.
   std::ostringstream ValueStream;
   ValueStream.width(0);
@@ -379,6 +379,53 @@ __muloti4(ti_int a, ti_int b, int* overflow)
 
 #endif
 
+
+ #if __i386__ && !defined(__APPLE__)
+
+ typedef int      di_int __attribute__ ((mode (DI)));
+ extern "C"
+ di_int
+ __mulodi4(di_int a, di_int b, int* overflow)
+ {
+     const int N = (int)(sizeof(di_int) * CHAR_BIT);
+    const di_int MIN = (di_int)1 << (N-1);
+    const di_int MAX = ~MIN;
+    *overflow = 0;
+    di_int result = a * b;
+    if (a == MIN)
+    {
+        if (b != 0 && b != 1)
+            *overflow = 1;
+        return result;
+    }
+    if (b == MIN)
+    {
+        if (a != 0 && a != 1)
+            *overflow = 1;
+        return result;
+    }
+    di_int sa = a >> (N - 1);
+    di_int abs_a = (a ^ sa) - sa;
+    di_int sb = b >> (N - 1);
+    di_int abs_b = (b ^ sb) - sb;
+    if (abs_a < 2 || abs_b < 2)
+        return result;
+    if (sa == sb)
+    {
+        if (abs_a > MAX / abs_b)
+            *overflow = 1;
+    }
+    else
+    {
+        if (abs_a > MIN / -abs_b)
+            *overflow = 1;
+    }
+    return result;
+}
+
+#endif
+
+
 // FIXME: ideally we would have a slow path here for Windows which would be
 // lowered to instructions as though MSVC had generated.  There does not seem to
 // be a MSVC provided multiply with overflow detection that I can see, but this
@@ -450,7 +497,7 @@ static bool swift_stringIsSignalingNaN(const char *nptr) {
 }
 
 #if defined(__CYGWIN__) || defined(_WIN32) || defined(__HAIKU__)
-// Cygwin does not support uselocale(), but we can use the locale feature 
+// Cygwin does not support uselocale(), but we can use the locale feature
 // in stringstream object.
 template <typename T>
 static const char *_swift_stdlib_strtoX_clocale_impl(
@@ -459,7 +506,7 @@ static const char *_swift_stdlib_strtoX_clocale_impl(
     *outResult = std::numeric_limits<T>::signaling_NaN();
     return nptr + std::strlen(nptr);
   }
-  
+
   std::istringstream ValueStream(nptr);
   ValueStream.imbue(std::locale::classic());
   T ParsedValue;
@@ -503,7 +550,7 @@ static const char *_swift_stdlib_strtoX_clocale_impl(
     *outResult = std::numeric_limits<T>::signaling_NaN();
     return nptr + std::strlen(nptr);
   }
-  
+
   char *EndPtr;
   errno = 0;
   const auto result = posixImpl(nptr, &EndPtr, getCLocale());
@@ -514,7 +561,7 @@ static const char *_swift_stdlib_strtoX_clocale_impl(
   }
   return EndPtr;
 }
-    
+
 const char *swift::_swift_stdlib_strtold_clocale(
   const char * nptr, void *outResult) {
   return _swift_stdlib_strtoX_clocale_impl(
@@ -557,4 +604,3 @@ int swift::_swift_stdlib_putc_stderr(int C) {
 size_t swift::_swift_stdlib_getHardwareConcurrency() {
   return std::thread::hardware_concurrency();
 }
-
